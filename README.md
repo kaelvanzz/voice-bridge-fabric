@@ -20,7 +20,7 @@ PV Player  ──► PV API  ──► Voice Bridge ──► SVC API ──► 
 
 ## Requirements
 
-- Fabric 1.21.1+ (Minecraft >=1.21.1 <1.22)
+- Fabric 1.21.11 (Minecraft 1.21.11 only — the mod uses APIs introduced in 1.21.11)
 - Fabric API
 - Java 21+
 - [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) (server-side mod)
