@@ -1,0 +1,29 @@
+﻿{
+  "schemaVersion": 1,
+  "id": "voice-bridge",
+  "version": "${version}",
+  "name": "Voice Bridge",
+  "description": "Bridges voice communication between Simple Voice Chat and Plasmo Voice",
+  "authors": ["andreypfau"],
+  "contact": {
+    "homepage": "https://modrinth.com/plugin/voice-bridge"
+  },
+  "license": "MIT",
+  "environment": "server",
+  "entrypoints": {
+    "main": [
+      "io.pfaumc.voicebridge.VoiceBridgeMod"
+    ],
+    "voicechat": [
+      "io.pfaumc.voicebridge.adapter.SvcAdapter"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=0.16.0",
+    "fabric-api": "*",
+    "minecraft": ">=1.21.1 <1.22",
+    "java": ">=21",
+    "voicechat_api": ">=2.6.0",
+    "plasmovoice": ">=2.1.8"
+  }
+}

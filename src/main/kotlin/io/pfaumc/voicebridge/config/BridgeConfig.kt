@@ -1,8 +1,10 @@
 package io.pfaumc.voicebridge.config
 
-import org.bukkit.configuration.file.YamlConfiguration
-import java.io.File
-import java.util.logging.Logger
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
+import org.yaml.snakeyaml.Yaml
+import java.nio.file.Files
+import java.nio.file.Path
 
 data class BridgeConfig(
     val enabled: Boolean = true,
@@ -17,38 +19,58 @@ data class BridgeConfig(
     val worldOverrides: Map<String, Double> = emptyMap()
 ) {
     companion object {
-        private val logger = Logger.getLogger("VoiceBridge")
+        private val logger: Logger = LoggerFactory.getLogger("VoiceBridge")
 
-        fun load(dataFolder: File): BridgeConfig {
-            val configFile = File(dataFolder, "config.yml")
+        @Suppress("UNCHECKED_CAST")
+        fun load(dataFolder: Path): BridgeConfig {
+            val configFile = dataFolder.resolve("config.yml")
 
-            if (!configFile.exists()) {
-                dataFolder.mkdirs()
-                configFile.writeText(DEFAULT_CONFIG)
-                logger.info("Created default config at ${configFile.absolutePath}")
+            if (!Files.exists(configFile)) {
+                Files.createDirectories(dataFolder)
+                Files.writeString(configFile, DEFAULT_CONFIG)
+                logger.info("Created default config at ${configFile.toAbsolutePath()}")
             }
 
-            val yaml = YamlConfiguration.loadConfiguration(configFile)
+            val root: Map<String, Any> =
+                Yaml().load<Map<String, Any>>(Files.readString(configFile)) ?: emptyMap()
 
+            fun section(name: String): Map<String, Any> =
+                root[name] as? Map<String, Any> ?: emptyMap()
+
+            fun Map<String, Any>.bool(key: String, def: Boolean): Boolean =
+                (this[key] as? Boolean) ?: def
+
+            fun Map<String, Any>.double(key: String, def: Double): Double =
+                (this[key] as? Number)?.toDouble() ?: def
+
+            fun Map<String, Any>.int(key: String, def: Int): Int =
+                (this[key] as? Number)?.toInt() ?: def
+
+            val worldsSection = section("worlds")
             val worldOverrides = mutableMapOf<String, Double>()
-            val worldsSection = yaml.getConfigurationSection("worlds")
-            worldsSection?.getKeys(false)?.forEach { worldName ->
-                val distance = worldsSection.getDouble("$worldName.default-distance", -1.0)
-                if (distance > 0) {
-                    worldOverrides[worldName] = distance
+            worldsSection.keys.forEach { worldName ->
+                (worldsSection[worldName] as? Map<String, Any>)?.let { world ->
+                    val distance = world.double("default-distance", -1.0)
+                    if (distance > 0) {
+                        worldOverrides[worldName] = distance
+                    }
                 }
             }
 
+            val bridge = section("bridge")
+            val proximity = section("proximity")
+            val audio = section("audio")
+
             return BridgeConfig(
-                enabled = yaml.getBoolean("bridge.enabled", true),
-                debug = yaml.getBoolean("bridge.debug", false),
-                defaultDistance = yaml.getDouble("proximity.default-distance", 48.0),
-                whisperMultiplier = yaml.getDouble("proximity.whisper-multiplier", 0.33),
-                maxDistance = yaml.getDouble("proximity.max-distance", 128.0),
-                passthrough = yaml.getBoolean("audio.passthrough", true),
-                forceTranscode = yaml.getBoolean("audio.force-transcode", false),
-                repacing = yaml.getBoolean("audio.repacing", true),
-                repacingJitterFrames = yaml.getInt("audio.jitter-frames", 2),
+                enabled = bridge.bool("enabled", true),
+                debug = bridge.bool("debug", false),
+                defaultDistance = proximity.double("default-distance", 48.0),
+                whisperMultiplier = proximity.double("whisper-multiplier", 0.33),
+                maxDistance = proximity.double("max-distance", 128.0),
+                passthrough = audio.bool("passthrough", true),
+                forceTranscode = audio.bool("force-transcode", false),
+                repacing = audio.bool("repacing", true),
+                repacingJitterFrames = audio.int("jitter-frames", 2),
                 worldOverrides = worldOverrides
             )
         }

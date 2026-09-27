@@ -1,10 +1,9 @@
 package io.pfaumc.voicebridge.adapter
 
 import io.pfaumc.voicebridge.BridgeMetrics
-import io.pfaumc.voicebridge.VoiceBridgePlugin
+import io.pfaumc.voicebridge.VoiceBridgeMod
 import io.pfaumc.voicebridge.session.ModType
-import org.bukkit.Bukkit
-import org.bukkit.entity.Player
+import net.minecraft.server.level.ServerPlayer
 import su.plo.voice.api.addon.AddonInitializer
 import su.plo.voice.api.addon.InjectPlasmoVoice
 import su.plo.voice.api.addon.annotation.Addon
@@ -21,7 +20,8 @@ import su.plo.voice.api.server.event.connection.UdpClientDisconnectedEvent
 import su.plo.voice.api.server.player.VoicePlayer
 import java.util.*
 import java.util.concurrent.ConcurrentHashMap
-import java.util.logging.Logger
+import org.slf4j.Logger
+import org.slf4j.LoggerFactory
 
 /**
  * Adapter for Plasmo Voice.
@@ -30,7 +30,7 @@ import java.util.logging.Logger
  * 1. Annotated with @Addon for PV to recognize it
  * 2. Implements AddonInitializer for lifecycle callbacks
  * 3. Uses @InjectPlasmoVoice for DI of the PlasmoVoiceServer instance
- * 4. Loaded via PlasmoVoiceServer.getAddonsLoader().load(this) from the main plugin
+ * 4. Loaded via PlasmoVoiceServer.getAddonsLoader().load(this) from the main mod initializer
  *
  * Audio interception:
  * - Registers a listener on the "proximity" ServerActivation to intercept PV player audio
@@ -42,15 +42,13 @@ import java.util.logging.Logger
     version = "0.1.0",
     authors = ["VoiceBridge"]
 )
-class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
+class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
 
-    private val logger = Logger.getLogger("VoiceBridge-PV")
+    private val logger: Logger = LoggerFactory.getLogger("VoiceBridge-PV")
 
     // Injected by PV's addon loading system via @InjectPlasmoVoice
     @InjectPlasmoVoice
     lateinit var voiceServer: PlasmoVoiceServer
-
-    var svcAdapter: SvcAdapter? = null
 
     private var sourceLine: ServerSourceLine? = null
     private var proximityActivation: ServerActivation? = null
@@ -71,7 +69,13 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
     // Used to skip re-registering them as real PV sessions in event handlers.
     private val bridgedConnectionUuids = ConcurrentHashMap.newKeySet<UUID>()
 
+    // One-shot diagnostics for the PV→SVC chain (logged once, then suppressed)
+    @Volatile private var loggedActivationMismatch = false
+    @Volatile private var loggedCastFailure = false
+    @Volatile private var loggedFirstFrame = false
+
     init {
+        instance = this
         // Register this addon with PV's addon loader.
         // PV will discover the @Addon annotation, inject @InjectPlasmoVoice fields,
         // and call onAddonInitialize().
@@ -79,7 +83,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
             PlasmoVoiceServer.getAddonsLoader().load(this)
             logger.info("Registered VoiceBridge as PV addon via AddonsLoader")
         } catch (e: Exception) {
-            logger.warning("Failed to register with PV AddonsLoader: ${e.message}")
+            logger.warn("Failed to register with PV AddonsLoader: ${e.message}")
         }
     }
 
@@ -89,7 +93,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         // Get the proximity source line for creating player sources
         sourceLine = voiceServer.sourceLineManager.getLineByName("proximity").orElse(null)
         if (sourceLine == null) {
-            logger.warning("Could not find 'proximity' source line — PV bridge may not work correctly")
+            logger.warn("Could not find 'proximity' source line — PV bridge may not work correctly")
         }
 
         // Resolve the proximity activation ID for filtering events
@@ -97,7 +101,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
             .getActivationByName("proximity")
             .orElse(null)
         if (proximityActivation == null) {
-            logger.warning("Proximity activation not found — PV→SVC bridge may not work")
+            logger.warn("Proximity activation not found — PV→SVC bridge may not work")
         }
 
         val cfg = plugin.bridgeConfig
@@ -136,7 +140,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         logger.info("PV player connected: $playerName")
 
         // Mark this player as connected in SVC so SVC clients see a voice icon
-        svcAdapter?.setExternalPlayerConnected(playerUuid, true)
+        SvcAdapter.instance?.setExternalPlayerConnected(playerUuid, true)
     }
 
     @EventSubscribe
@@ -148,7 +152,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         if (bridgedConnectionUuids.remove(playerUuid)) return
 
         // Mark this player as disconnected in SVC
-        svcAdapter?.setExternalPlayerConnected(playerUuid, false)
+        SvcAdapter.instance?.setExternalPlayerConnected(playerUuid, false)
 
         // Remove only the PV mod type; session is fully removed only when all mod types are gone
         plugin.sessionManager.unregister(playerUuid, ModType.PLASMO_VOICE)
@@ -159,7 +163,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         repacer?.remove(playerUuid)
 
         // Clean up outbound SVC channels for this player
-        plugin.audioRelay.svcAdapter?.removeChannel(playerUuid)
+        SvcAdapter.instance?.removeChannel(playerUuid)
     }
 
     // --- Audio Reception from PV Players ---
@@ -171,7 +175,16 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
     @EventSubscribe
     fun onPlayerActivation(event: PlayerServerActivationEvent) {
         // Only intercept proximity audio
-        if (event.activation != proximityActivation) return
+        if (event.activation != proximityActivation) {
+            if (!loggedActivationMismatch) {
+                loggedActivationMismatch = true
+                logger.warn(
+                    "PV activation event received but does not match our 'proximity' activation " +
+                        "(event=${event.activation?.javaClass?.simpleName}) — PV→SVC relay will not work"
+                )
+            }
+            return
+        }
 
         val player = event.player
         val packet = event.packet
@@ -184,7 +197,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         val opusData = try {
             voiceServer.defaultEncryption.decrypt(packet.data)
         } catch (e: EncryptionException) {
-            logger.fine("Failed to decrypt PV audio from ${player.instance.name}: ${e.message}")
+            logger.warn("Failed to decrypt PV audio from ${player.instance.name}: ${e.message}")
             BridgeMetrics.droppedFrames.incrementAndGet()
             return
         }
@@ -192,13 +205,26 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         // Touch session
         plugin.sessionManager.getSession(playerUuid)?.touch()
 
-        // Get the Bukkit player
-        val bukkitPlayer = Bukkit.getPlayer(playerUuid) ?: return
+        // Get the server player.
+        // PV's VoicePlayer.instance is a slib wrapper (ModServerPlayer), not the raw
+        // ServerPlayer — look the player up by UUID from the server instead of casting.
+        val senderPlayer = plugin.server?.playerList?.getPlayer(playerUuid) ?: run {
+            if (!loggedCastFailure) {
+                loggedCastFailure = true
+                logger.warn("Could not find ServerPlayer for PV player ${player.instance.name} — PV→SVC relay will not work")
+            }
+            return
+        }
+
+        if (!loggedFirstFrame) {
+            loggedFirstFrame = true
+            logger.info("PV→SVC: received first audio frame from ${player.instance.name} (dist=$distance)")
+        }
 
         // Relay to SVC players via AudioRelay
         plugin.audioRelay.relayPvToSvc(
             senderUuid = playerUuid,
-            senderPlayer = bukkitPlayer,
+            senderPlayer = senderPlayer,
             opusData = opusData,
             sequenceNumber = sequenceNumber,
             distance = distance
@@ -212,7 +238,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         val playerUuid = event.player.instance.uuid
 
         // Notify SVC adapter to flush the channel for this player
-        plugin.audioRelay.svcAdapter?.flushChannel(playerUuid)
+        SvcAdapter.instance?.flushChannel(playerUuid)
     }
 
     // --- Outbound: Send audio FROM an SVC player TO PV clients ---
@@ -227,7 +253,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
      */
     fun sendAudioFromExternalPlayer(
         senderUuid: UUID,
-        senderPlayer: Player,
+        senderPlayer: ServerPlayer,
         opusData: ByteArray,
         sequenceNumber: Long,
         distance: Short
@@ -270,7 +296,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         val encryptedData = try {
             voiceServer.defaultEncryption.encrypt(opusData)
         } catch (e: EncryptionException) {
-            logger.fine("Failed to encrypt audio for PV: ${e.message}")
+            logger.debug("Failed to encrypt audio for PV: ${e.message}")
             BridgeMetrics.droppedFrames.incrementAndGet()
             return
         }
@@ -296,7 +322,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         outboundSources.remove(senderUuid)?.let { source ->
             source.sendAudioEnd(seq, 0)
             source.remove()
-            logger.fine("Cleaned up PV source for player $senderUuid")
+            logger.debug("Cleaned up PV source for player $senderUuid")
         }
     }
 
@@ -306,8 +332,8 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
     fun registerBridgedConnection(playerUuid: UUID) {
         if (!::voiceServer.isInitialized) return
 
-        val bukkitPlayer = Bukkit.getPlayer(playerUuid) ?: return
-        val voicePlayer = voiceServer.playerManager.getPlayerByInstance(bukkitPlayer)
+        val serverPlayer = plugin.server?.playerList?.getPlayer(playerUuid) ?: return
+        val voicePlayer = voiceServer.playerManager.getPlayerByInstance(serverPlayer)
 
         bridgedConnectionUuids.add(playerUuid)
         val connection = BridgedUdpConnection(voicePlayer)
@@ -317,7 +343,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         // addConnection() alone only registers internally; the PlayerInfoUpdatePacket
         // must be sent explicitly for clients to update their player list.
         voiceServer.tcpPacketManager.broadcastPlayerInfoUpdate(voicePlayer)
-        logger.fine("Registered bridged PV connection for SVC player $playerUuid")
+        logger.debug("Registered bridged PV connection for SVC player $playerUuid")
     }
 
     /**
@@ -330,7 +356,7 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
         val secret = voiceServer.udpConnectionManager.getSecretByPlayerId(playerUuid)
         voiceServer.udpConnectionManager.removeConnection(secret)
         // bridgedConnectionUuids is cleaned up in onPlayerDisconnected when the event fires
-        logger.fine("Removed bridged PV connection for SVC player $playerUuid")
+        logger.debug("Removed bridged PV connection for SVC player $playerUuid")
     }
 
     fun shutdown() {
@@ -354,6 +380,9 @@ class PvAdapter(private val plugin: VoiceBridgePlugin) : AddonInitializer {
     }
 
     companion object {
+        var instance: PvAdapter? = null
+            private set
+
         // Both mods use 20ms Opus frames (960 samples @ 48kHz).
         private const val FRAME_INTERVAL_MS = 20L
         // Headroom above the lead before the pacer drops the oldest frame (bounds latency under drift).

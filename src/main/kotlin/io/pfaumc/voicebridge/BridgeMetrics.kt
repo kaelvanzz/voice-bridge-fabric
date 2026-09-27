@@ -2,7 +2,7 @@ package io.pfaumc.voicebridge
 
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
-import java.util.logging.Logger
+import org.slf4j.Logger
 
 object BridgeMetrics {
     val activeSessions = AtomicInteger(0)

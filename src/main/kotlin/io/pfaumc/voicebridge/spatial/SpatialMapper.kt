@@ -1,30 +1,28 @@
 package io.pfaumc.voicebridge.spatial
 
 import io.pfaumc.voicebridge.config.BridgeConfig
-import org.bukkit.World
 
 class SpatialMapper(var config: BridgeConfig) {
 
     /**
      * Convert SVC distance (Float) to PV distance (Short).
      */
-    fun svcToPvDistance(svcDistance: Float, world: World? = null): Short {
-        val effective = getEffectiveDistance(svcDistance.toDouble(), world)
+    fun svcToPvDistance(svcDistance: Float, worldName: String? = null): Short {
+        val effective = getEffectiveDistance(svcDistance.toDouble(), worldName)
         return effective.toInt().coerceIn(1, Short.MAX_VALUE.toInt()).toShort()
     }
 
     /**
      * Convert PV distance (Short) to SVC distance (Float).
      */
-    fun pvToSvcDistance(pvDistance: Short, world: World? = null): Float {
-        return getEffectiveDistance(pvDistance.toDouble(), world).toFloat()
+    fun pvToSvcDistance(pvDistance: Short, worldName: String? = null): Float {
+        return getEffectiveDistance(pvDistance.toDouble(), worldName).toFloat()
     }
 
     /**
      * Get the effective distance, applying per-world overrides if configured.
      */
-    fun getEffectiveDistance(distance: Double, world: World? = null): Double {
-        val worldName = world?.name
+    fun getEffectiveDistance(distance: Double, worldName: String? = null): Double {
         val maxDistance = config.maxDistance
         val worldOverride = worldName?.let { config.worldOverrides[it] }
         val effectiveDefault = worldOverride ?: config.defaultDistance

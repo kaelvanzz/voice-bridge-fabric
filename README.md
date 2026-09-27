@@ -1,9 +1,11 @@
-# Voice Bridge
+# Voice Bridge (Fabric)
 
-A server-side [Paper](https://papermc.io/) plugin that bridges proximity voice chat
+A server-side [Fabric](https://fabricmc.net/) mod that bridges proximity voice chat
 between [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat)
 and [Plasmo Voice](https://modrinth.com/plugin/plasmo-voice), allowing players using different voice mods to hear each
 other.
+
+A port of the original Paper plugin [PfauMC/voice-bridge](https://github.com/PfauMC/voice-bridge) to Fabric.
 
 ## How it works
 
@@ -18,16 +20,17 @@ PV Player  ──► PV API  ──► Voice Bridge ──► SVC API ──► 
 
 ## Requirements
 
-- Paper 1.21.4+ (or Folia)
+- Fabric 1.21.1+ (Minecraft >=1.21.1 <1.22)
+- Fabric API
 - Java 21+
-- [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) (server-side plugin)
-- [Plasmo Voice](https://modrinth.com/plugin/plasmo-voice) (server-side plugin)
+- [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) (server-side mod)
+- [Plasmo Voice](https://modrinth.com/plugin/plasmo-voice) (server-side mod)
 
 ## Installation
 
-1. Install both Simple Voice Chat and Plasmo Voice on your Paper server
+1. Install both Simple Voice Chat and Plasmo Voice on your Fabric server
 2. Download `voice-bridge-<version>.jar` from [Modrinth](https://modrinth.com/plugin/voice-bridge)
-3. Place it in your server's `plugins/` directory
+3. Place it in your server's `mods/` directory
 4. Restart the server
 
 ## Building from source
@@ -36,21 +39,17 @@ PV Player  ──► PV API  ──► Voice Bridge ──► SVC API ──► 
 ./gradlew build
 ```
 
-The plugin jar will be in `build/libs/`.
+The mod jar will be in `build/libs/` (the one without the `-all` classifier).
 
 ### Running a dev server
 
 ```shell
-# With Mojang mappings (for debugging)
-./gradlew runDevBundleServer
-
-# With obfuscation (production-like)
 ./gradlew runServer
 ```
 
 ## Configuration
 
-A `config.yml` is generated on first run in `plugins/voice-bridge/`:
+A `config.yml` is generated on first run in `config/voice-bridge/`:
 
 ```yaml
 bridge:
@@ -72,11 +71,15 @@ audio:
 You can override the default voice distance for specific worlds:
 
 ```yaml
-proximity:
-  world-overrides:
-    world_nether: 24.0
-    world_the_end: 64.0
+worlds:
+  minecraft:the_nether:
+    default-distance: 24.0
+  minecraft:the_end:
+    default-distance: 64.0
 ```
+
+Note: on Fabric, world keys use the `namespace:path` form of the dimension identifier
+(e.g. `minecraft:overworld`, `minecraft:the_nether`).
 
 ## Commands
 
@@ -89,13 +92,14 @@ proximity:
 
 Alias: `/vb`
 
-Permission: `voicebridge.admin` (default: op)
+Permission: vanilla game-master commands permission (`Permissions.COMMANDS_GAMEMASTER`; server ops granted via
+`/op` have all command permissions by default)
 
 ## Architecture
 
 ```
 ┌────────────────────────────────────────────────┐
-│              VoiceBridgePlugin                 │
+│                VoiceBridgeMod                  │
 ├───────────┬───────────┬────────────┬───────────┤
 │ SvcAdapter│ PvAdapter │ AudioRelay │  Session  │
 │           │           │            │  Manager  │
@@ -104,11 +108,20 @@ Permission: `voicebridge.admin` (default: op)
 └────────────────────────────────────────────────┘
 ```
 
-- **SvcAdapter** — integrates with Simple Voice Chat via `VoicechatPlugin`
-- **PvAdapter** — integrates with Plasmo Voice via `@Addon` / `AddonInitializer`
+- **SvcAdapter** — integrates with Simple Voice Chat via `VoicechatPlugin`, registered through the `voicechat`
+  entrypoint in `fabric.mod.json`
+- **PvAdapter** — integrates with Plasmo Voice via `@Addon` / `AddonInitializer`, loaded through
+  `PlasmoVoiceServer.getAddonsLoader()` on initialize
 - **AudioRelay** — central router that forwards audio frames between adapters
 - **SessionManager** — tracks which mod each player is using
 - **SpatialMapper** — converts between SVC float distances and PV short distances
+
+## Differences from the Paper version
+
+- Config lives in `config/voice-bridge/` instead of `plugins/voice-bridge/`
+- World overrides are keyed by dimension identifier (`minecraft:the_nether`) instead of Bukkit world names
+- bStats is not included (no Fabric-compatible bStats module); internal `BridgeMetrics` counters remain
+- Command permission is op level 2 instead of the `voicebridge.admin` permission node
 
 ## Known limitations
 
