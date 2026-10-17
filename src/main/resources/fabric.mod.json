@@ -21,9 +21,9 @@
   "depends": {
     "fabricloader": ">=0.16.0",
     "fabric-api": "*",
-    "minecraft": ">=1.21.11 <1.21.12",
+    "minecraft": ">=1.21.5 <1.21.12",
     "java": ">=21",
-    "voicechat_api": ">=2.6.0",
+    "voicechat": "*",
     "plasmovoice": ">=2.1.8"
   }
 }

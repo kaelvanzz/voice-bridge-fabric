@@ -1,8 +1,9 @@
-﻿package io.pfaumc.voicebridge.relay
+package io.pfaumc.voicebridge.relay
 
 import io.pfaumc.voicebridge.BridgeMetrics
 import io.pfaumc.voicebridge.adapter.PvAdapter
 import io.pfaumc.voicebridge.adapter.SvcAdapter
+import io.pfaumc.voicebridge.compat.Compat
 import io.pfaumc.voicebridge.config.BridgeConfig
 import io.pfaumc.voicebridge.session.SessionManager
 import io.pfaumc.voicebridge.spatial.SpatialMapper
@@ -59,7 +60,7 @@ class AudioRelay(
         } else {
             distance.toDouble()
         }
-        val worldName = senderPlayer.level().dimension().identifier().path
+        val worldName = senderPlayer.serverLevel().dimension().location().path
         val pvDistance = spatialMapper.svcToPvDistance(effectiveDistance.toFloat(), worldName)
 
         // Let the PV adapter handle sending to nearby PV players
@@ -76,7 +77,7 @@ class AudioRelay(
         }
 
         if (debugProvider()) {
-            logger.debug("SVC->PV: ${senderPlayer.gameProfile.name} seq=$sequenceNumber dist=$pvDistance whisper=$whispering")
+            logger.debug("SVC->PV: ${Compat.profileName(senderPlayer.gameProfile)} seq=$sequenceNumber dist=$pvDistance whisper=$whispering")
         }
     }
 
@@ -101,7 +102,7 @@ class AudioRelay(
         // Skip relay for dual-mod players ??SVC clients already hear them via SVC natively
         if (sessionManager.isDualMod(senderUuid)) return
 
-        val worldName = senderPlayer.level().dimension().identifier().path
+        val worldName = senderPlayer.serverLevel().dimension().location().path
         val svcDistance = spatialMapper.pvToSvcDistance(distance, worldName)
 
         // Let the SVC adapter handle sending to nearby SVC players
@@ -118,7 +119,7 @@ class AudioRelay(
         }
 
         if (debugProvider()) {
-            logger.debug("PV->SVC: ${senderPlayer.gameProfile.name} seq=$sequenceNumber dist=$svcDistance")
+            logger.debug("PV->SVC: ${Compat.profileName(senderPlayer.gameProfile)} seq=$sequenceNumber dist=$svcDistance")
         }
     }
 }

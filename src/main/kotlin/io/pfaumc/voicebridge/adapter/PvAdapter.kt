@@ -3,6 +3,7 @@ package io.pfaumc.voicebridge.adapter
 import io.pfaumc.voicebridge.BridgeMetrics
 import io.pfaumc.voicebridge.VoiceBridgeMod
 import io.pfaumc.voicebridge.session.ModType
+import net.minecraft.server.level.ServerLevel
 import net.minecraft.server.level.ServerPlayer
 import su.plo.voice.api.addon.AddonInitializer
 import su.plo.voice.api.addon.InjectPlasmoVoice
@@ -57,10 +58,19 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
     private var repacer: FrameRepacer? = null
 
     // ServerEntitySources for relaying SVC player audio to PV clients.
-    // Key: SVC player UUID (the "speaker"), Value: source that PV clients listen to.
-    // Uses entity sources instead of player sources because SVC-only players
-    // are not connected to PV's UDP server.
-    private val outboundSources = ConcurrentHashMap<UUID, ServerEntitySource>()
+    // Key: SVC player UUID (the "speaker").
+    //
+    // The source anchors to the speaker's entity at creation. A respawn replaces the
+    // ServerPlayer instance and a cross-dimension teleport moves it to another level, so a
+    // stale source broadcasts from the death spot / old dimension. Recreate the source
+    // whenever the captured entity or level instance no longer matches.
+    private class OutboundSource(
+        val source: ServerEntitySource,
+        val entity: ServerPlayer,
+        val level: ServerLevel
+    )
+
+    private val outboundSources = ConcurrentHashMap<UUID, OutboundSource>()
 
     // Track sequence numbers per source for outbound audio
     private val sequenceNumbers = ConcurrentHashMap<UUID, Long>()
@@ -78,7 +88,8 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         instance = this
         // Register this addon with PV's addon loader.
         // PV will discover the @Addon annotation, inject @InjectPlasmoVoice fields,
-        // and call onAddonInitialize().
+        // and call onAddonInitialize() — on PV 2.1.x this happens during server start,
+        // after PV's config (and therefore activations/source lines) are ready.
         try {
             PlasmoVoiceServer.getAddonsLoader().load(this)
             logger.info("Registered VoiceBridge as PV addon via AddonsLoader")
@@ -158,7 +169,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         plugin.sessionManager.unregister(playerUuid, ModType.PLASMO_VOICE)
 
         // Clean up outbound sources
-        outboundSources.remove(playerUuid)?.remove()
+        outboundSources.remove(playerUuid)?.let { runCatching { it.source.remove() } }
         sequenceNumbers.remove(playerUuid)
         repacer?.remove(playerUuid)
 
@@ -259,13 +270,24 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         distance: Short
     ): Boolean {
         val line = sourceLine ?: return false
+        val currentLevel = senderPlayer.serverLevel()
 
-        outboundSources.computeIfAbsent(senderUuid) { _ ->
+        var entry = outboundSources[senderUuid]
+        if (entry != null && (entry.entity !== senderPlayer || entry.level !== currentLevel)) {
+            runCatching { entry.source.remove() }
+            outboundSources.remove(senderUuid, entry)
+            logger.debug("SVC→PV: stale entity source for $senderUuid (entity/level changed), recreating")
+            entry = null
+        }
+
+        if (entry == null) {
             val mcEntity = voiceServer.minecraftServer.getPlayerByInstance(senderPlayer)
-            line.createEntitySource(mcEntity, false).apply {
+            val created = line.createEntitySource(mcEntity, false).apply {
                 // Exclude dual-mod players — they already hear SVC audio natively
                 addFilter<VoicePlayer> { player -> !plugin.sessionManager.isDualMod(player.instance.uuid) }
             }
+            entry = OutboundSource(created, senderPlayer, currentLevel)
+            outboundSources[senderUuid] = entry
         }
 
         val pacer = repacer
@@ -286,7 +308,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
      * pacer thread; otherwise it runs inline on the caller's thread.
      */
     private fun emitFrame(senderUuid: UUID, opusData: ByteArray, distance: Short) {
-        val source = outboundSources[senderUuid] ?: return
+        val source = outboundSources[senderUuid]?.source ?: return
 
         val seq = sequenceNumbers.merge(senderUuid, 1L) { current, _ -> current + 1 } ?: 1L
 
@@ -301,7 +323,13 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
             return
         }
 
-        source.sendAudioFrame(encryptedData, seq, distance)
+        // Never let a PV-side exception travel back onto the caller's thread.
+        try {
+            source.sendAudioFrame(encryptedData, seq, distance)
+        } catch (t: Throwable) {
+            logger.debug("SVC→PV: send failed for $senderUuid: ${t.message}")
+            BridgeMetrics.droppedFrames.incrementAndGet()
+        }
     }
 
     /**
@@ -309,7 +337,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
      */
     fun sendAudioEnd(senderUuid: UUID, distance: Short) {
         val seq = sequenceNumbers[senderUuid] ?: return
-        outboundSources[senderUuid]?.sendAudioEnd(seq, distance)
+        outboundSources[senderUuid]?.let { runCatching { it.source.sendAudioEnd(seq, distance) } }
     }
 
     /**
@@ -319,9 +347,11 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
     fun cleanupSource(senderUuid: UUID) {
         repacer?.remove(senderUuid)
         val seq = sequenceNumbers.remove(senderUuid) ?: return
-        outboundSources.remove(senderUuid)?.let { source ->
-            source.sendAudioEnd(seq, 0)
-            source.remove()
+        outboundSources.remove(senderUuid)?.let { entry ->
+            runCatching {
+                entry.source.sendAudioEnd(seq, 0)
+                entry.source.remove()
+            }
             logger.debug("Cleaned up PV source for player $senderUuid")
         }
     }
@@ -373,7 +403,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         }
         bridgedConnectionUuids.clear()
 
-        outboundSources.values.forEach { it.remove() }
+        outboundSources.values.forEach { runCatching { it.source.remove() } }
         outboundSources.clear()
         sequenceNumbers.clear()
         logger.info("PV adapter shut down")

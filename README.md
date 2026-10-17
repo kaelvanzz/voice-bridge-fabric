@@ -20,7 +20,8 @@ PV Player  ──► PV API  ──► Voice Bridge ──► SVC API ──► 
 
 ## Requirements
 
-- Fabric 1.21.11 (Minecraft 1.21.11 only — the mod uses APIs introduced in 1.21.11)
+- Fabric 1.21.5 – 1.21.11 (one jar covers the whole range; compiled against 1.21.5 with
+  runtime shims for APIs that diverged in later versions — see `compat/Compat.kt`)
 - Fabric API
 - Java 21+
 - [Simple Voice Chat](https://modrinth.com/plugin/simple-voice-chat) (server-side mod)
@@ -29,7 +30,7 @@ PV Player  ──► PV API  ──► Voice Bridge ──► SVC API ──► 
 ## Installation
 
 1. Install both Simple Voice Chat and Plasmo Voice on your Fabric server
-2. Download `voice-bridge-<version>.jar` from [Modrinth](https://modrinth.com/plugin/voice-bridge)
+2. Download `voice-bridge-<version>.jar` from the [releases page](https://github.com/kaelvanzz/voice-bridge-fabric/releases)
 3. Place it in your server's `mods/` directory
 4. Restart the server
 
@@ -115,6 +116,8 @@ Permission: vanilla game-master commands permission (`Permissions.COMMANDS_GAMEM
 - **AudioRelay** — central router that forwards audio frames between adapters
 - **SessionManager** — tracks which mod each player is using
 - **SpatialMapper** — converts between SVC float distances and PV short distances
+- **Compat** — cross-version shims (1.21.5–1.21.11); resolves the pre/post-1.21.9 permission APIs
+  reflectively at runtime
 
 ## Differences from the Paper version
 

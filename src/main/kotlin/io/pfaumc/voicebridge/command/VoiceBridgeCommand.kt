@@ -8,13 +8,13 @@ import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback
 import net.minecraft.ChatFormatting
 import net.minecraft.commands.CommandSourceStack
 import net.minecraft.commands.Commands
-import net.minecraft.server.permissions.Permissions
 import net.minecraft.network.chat.ClickEvent
 import net.minecraft.network.chat.Component
 import net.minecraft.network.chat.ComponentUtils
 import net.minecraft.network.chat.HoverEvent
 import io.pfaumc.voicebridge.BridgeMetrics
 import io.pfaumc.voicebridge.VoiceBridgeMod
+import io.pfaumc.voicebridge.compat.Compat
 import io.pfaumc.voicebridge.session.ModType
 
 object VoiceBridgeCommand {
@@ -37,7 +37,7 @@ object VoiceBridgeCommand {
 
     private fun buildCommand(root: String): LiteralArgumentBuilder<CommandSourceStack> =
         Commands.literal(root)
-            .requires { it.permissions().hasPermission(Permissions.COMMANDS_GAMEMASTER) }
+            .requires { Compat.hasGamemasterPermission(it) }
             .executes { showHelp(it) }
             .then(
                 Commands.literal("status")
