@@ -106,9 +106,16 @@ class SessionManager {
         BridgeMetrics.activeSessions.set(0)
     }
 
-    fun cleanup() {
+    /**
+     * Remove stale sessions. A session is stale when it has been inactive past
+     * [STALE_TIMEOUT_MS], or when [isOnline] proves the player is no longer connected
+     * (guards against missed disconnect events leaking sessions forever).
+     */
+    fun cleanup(isOnline: ((UUID) -> Boolean)? = null) {
         val staleThreshold = System.currentTimeMillis() - STALE_TIMEOUT_MS
-        val stale = sessions.entries.filter { it.value.lastActivityAt < staleThreshold && !it.value.active }
+        val stale = sessions.entries.filter { (uuid, session) ->
+            (session.lastActivityAt < staleThreshold && !session.active) || isOnline?.invoke(uuid) == false
+        }
         stale.forEach { (uuid, session) ->
             sessions.remove(uuid)
             BridgeMetrics.activeSessions.decrementAndGet()

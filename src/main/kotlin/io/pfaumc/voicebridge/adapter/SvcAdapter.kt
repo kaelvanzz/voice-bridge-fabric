@@ -52,7 +52,6 @@ class SvcAdapter : VoicechatPlugin {
     )
 
     private val outboundChannels = ConcurrentHashMap<UUID, OutboundChannel>()
-    private val channelVersions = ConcurrentHashMap<UUID, Long>()
 
     private val plugin: VoiceBridgeMod?
         get() = VoiceBridgeMod.instance?.takeIf { VoiceBridgeMod.isReady() }
@@ -92,8 +91,13 @@ class SvcAdapter : VoicechatPlugin {
         mod.sessionManager.register(playerUuid, playerName, ModType.SIMPLE_VOICE_CHAT)
         logger.info("SVC player connected: $playerName")
 
-        // Register a fake UDP connection in PV so PV clients see a voice icon
-        PvAdapter.instance?.registerBridgedConnection(playerUuid)
+        // Register a fake UDP connection in PV so PV clients see a voice icon — but only
+        // for SVC-only players. A player whose PV side already connected must not get a
+        // fake connection: it would shadow their real one and hide their dual-mod status.
+        val session = mod.sessionManager.getSession(playerUuid)
+        if (session == null || !session.hasModType(ModType.PLASMO_VOICE)) {
+            PvAdapter.instance?.registerBridgedConnection(playerUuid)
+        }
     }
 
     private fun onPlayerDisconnected(event: PlayerDisconnectedEvent) {
@@ -181,10 +185,10 @@ class SvcAdapter : VoicechatPlugin {
 
         if (entry == null) {
             val entity = api.fromEntity(senderPlayer)
-            // Versioned id: never collide with a channel SVC still has registered from a
-            // previous entity/level generation of the same player.
-            val version = channelVersions.merge(senderUuid, 1L) { _, old -> old + 1 } ?: 1L
-            val channelId = UUID.nameUUIDFromBytes("voice-bridge-$senderUuid-$version".toByteArray())
+            // Fresh random id per recreation — never collides with a channel SVC still has
+            // registered from a previous entity/level generation of the same player, and
+            // needs no per-player state.
+            val channelId = UUID.randomUUID()
             val newChannel = api.createEntityAudioChannel(channelId, entity)
             if (newChannel == null) {
                 logger.warn("Failed to create EntityAudioChannel for PV player $senderUuid")

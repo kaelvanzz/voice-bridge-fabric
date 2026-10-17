@@ -75,9 +75,11 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
     // Track sequence numbers per source for outbound audio
     private val sequenceNumbers = ConcurrentHashMap<UUID, Long>()
 
-    // UUIDs of players with fake bridged UDP connections (SVC-only players).
-    // Used to skip re-registering them as real PV sessions in event handlers.
-    private val bridgedConnectionUuids = ConcurrentHashMap.newKeySet<UUID>()
+    // Fake bridged UDP connections (SVC-only players): player UUID -> the fake connection's
+    // own secret. Storing the secret lets us remove exactly the fake connection — a dual-mod
+    // player's real PV connection may have replaced PV's per-player index, so resolving the
+    // secret by player id could target the wrong connection.
+    private val bridgedConnections = ConcurrentHashMap<UUID, UUID>()
 
     // One-shot diagnostics for the PV→SVC chain (logged once, then suppressed)
     @Volatile private var loggedActivationMismatch = false
@@ -141,8 +143,13 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         val player = event.connection.player
         val playerUuid = player.instance.uuid
 
-        // Skip if this is our own fake bridged connection for an SVC-only player
-        if (playerUuid in bridgedConnectionUuids) return
+        // If this is a dual-mod player whose SVC voice connected first, we created a fake
+        // bridged connection for them earlier — tear it down now that their real PV
+        // connection arrived, then continue with normal registration.
+        if (bridgedConnections.containsKey(playerUuid)) {
+            removeFakeConnection(playerUuid)
+            logger.info("Replaced fake bridged connection with real PV connection for $playerUuid")
+        }
 
         val playerName = player.instance.name
 
@@ -159,8 +166,8 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         val player = event.connection.player
         val playerUuid = player.instance.uuid
 
-        // If this is our own fake bridged connection being removed, just clean up the set
-        if (bridgedConnectionUuids.remove(playerUuid)) return
+        // If this is our own fake bridged connection being removed, just clean up the map
+        if (bridgedConnections.remove(playerUuid) != null) return
 
         // Mark this player as disconnected in SVC
         SvcAdapter.instance?.setExternalPlayerConnected(playerUuid, false)
@@ -361,12 +368,13 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
      */
     fun registerBridgedConnection(playerUuid: UUID) {
         if (!::voiceServer.isInitialized) return
+        if (bridgedConnections.containsKey(playerUuid)) return
 
         val serverPlayer = plugin.server?.playerList?.getPlayer(playerUuid) ?: return
         val voicePlayer = voiceServer.playerManager.getPlayerByInstance(serverPlayer)
 
-        bridgedConnectionUuids.add(playerUuid)
         val connection = BridgedUdpConnection(voicePlayer)
+        bridgedConnections[playerUuid] = connection.secret
         voiceServer.udpConnectionManager.addConnection(connection)
 
         // Broadcast player info to all PV clients so they see a voice icon.
@@ -381,12 +389,16 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
      */
     fun removeBridgedConnection(playerUuid: UUID) {
         if (!::voiceServer.isInitialized) return
-        if (!bridgedConnectionUuids.contains(playerUuid)) return
+        if (!bridgedConnections.containsKey(playerUuid)) return
 
-        val secret = voiceServer.udpConnectionManager.getSecretByPlayerId(playerUuid)
-        voiceServer.udpConnectionManager.removeConnection(secret)
-        // bridgedConnectionUuids is cleaned up in onPlayerDisconnected when the event fires
+        removeFakeConnection(playerUuid)
+        // bridgedConnections entry is cleaned up in onPlayerDisconnected when the event fires
         logger.debug("Removed bridged PV connection for SVC player $playerUuid")
+    }
+
+    private fun removeFakeConnection(playerUuid: UUID) {
+        val secret = bridgedConnections.remove(playerUuid) ?: return
+        runCatching { voiceServer.udpConnectionManager.removeConnection(secret) }
     }
 
     fun shutdown() {
@@ -394,14 +406,10 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         repacer = null
 
         // Clean up any remaining bridged connections
-        for (uuid in bridgedConnectionUuids) {
-            try {
-                val secret = voiceServer.udpConnectionManager.getSecretByPlayerId(uuid)
-                voiceServer.udpConnectionManager.removeConnection(secret)
-            } catch (_: Exception) {
-            }
+        for (secret in bridgedConnections.values) {
+            runCatching { voiceServer.udpConnectionManager.removeConnection(secret) }
         }
-        bridgedConnectionUuids.clear()
+        bridgedConnections.clear()
 
         outboundSources.values.forEach { runCatching { it.source.remove() } }
         outboundSources.clear()

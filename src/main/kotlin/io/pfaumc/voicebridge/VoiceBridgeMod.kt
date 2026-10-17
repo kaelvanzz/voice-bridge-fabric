@@ -105,7 +105,8 @@ class VoiceBridgeMod : ModInitializer {
         scope.launch {
             while (isActive) {
                 delay(5.seconds)
-                sessionManager.cleanup()
+                val server = server
+                sessionManager.cleanup(if (server != null) { uuid -> server.playerList.getPlayer(uuid) != null } else null)
             }
         }
     }
