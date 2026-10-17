@@ -30,7 +30,7 @@ PV Player  ──► PV API  ──► Voice Bridge ──► SVC API ──► 
 ## Installation
 
 1. Install both Simple Voice Chat and Plasmo Voice on your Fabric server
-2. Download `voice-bridge-<version>.jar` from the [releases page](https://github.com/kaelvanzz/voice-bridge-fabric/releases)
+2. Download `voice-bridge-<version>.jar` from [Modrinth](https://modrinth.com/mod/voice-bridge-fabric)
 3. Place it in your server's `mods/` directory
 4. Restart the server
 

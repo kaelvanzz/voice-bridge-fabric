@@ -6,7 +6,7 @@
   "description": "Bridges voice communication between Simple Voice Chat and Plasmo Voice",
   "authors": ["andreypfau"],
   "contact": {
-    "homepage": "https://modrinth.com/plugin/voice-bridge"
+    "homepage": "https://modrinth.com/mod/voice-bridge-fabric"
   },
   "license": "MIT",
   "environment": "server",
