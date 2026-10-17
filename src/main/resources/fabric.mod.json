@@ -9,6 +9,7 @@
     "homepage": "https://modrinth.com/mod/voice-bridge-fabric"
   },
   "license": "MIT",
+  "icon": "assets/voice-bridge/icon.png",
   "environment": "server",
   "entrypoints": {
     "main": [
