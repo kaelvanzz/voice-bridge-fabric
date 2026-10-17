@@ -128,9 +128,12 @@ Permission: vanilla game-master commands permission (`Permissions.COMMANDS_GAMEM
 
 ## Known limitations
 
-- Group/channel bridging is not supported (proximity chat only)
+- Group/channel bridging is not supported yet (proximity chat only)
 - Transcoding mode is not yet implemented (passthrough only)
-- SVC-only players may not receive audio from PV players in some edge cases
+
+The SVC-only edge cases from the original Paper version (audio from PV players not heard
+after respawns or cross-dimension teleports) are fixed since 2.1.1 — outbound audio
+channels are rebuilt automatically whenever the speaker's entity or dimension changes.
 
 ## License
 
