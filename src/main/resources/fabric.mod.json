@@ -3,8 +3,8 @@
   "id": "voice-bridge",
   "version": "${version}",
   "name": "Voice Bridge",
-  "description": "Bridges voice communication between Simple Voice Chat and Plasmo Voice",
-  "authors": ["andreypfau"],
+  "description": "A Fabric port of PfauMC's Voice Bridge - bridges voice communication between Simple Voice Chat and Plasmo Voice",
+  "authors": ["kaelvanzz", "andreypfau"],
   "contact": {
     "homepage": "https://modrinth.com/mod/voice-bridge-fabric"
   },
