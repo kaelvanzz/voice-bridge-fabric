@@ -143,9 +143,13 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         val player = event.connection.player
         val playerUuid = player.instance.uuid
 
-        // If this is a dual-mod player whose SVC voice connected first, we created a fake
-        // bridged connection for them earlier ??tear it down now that their real PV
-        // connection arrived, then continue with normal registration.
+        // Our own fake bridged connection fires this event too — ignore it entirely.
+        // (Registering the fake connection must NOT tear it down or mark the player as PV!)
+        if (event.connection is BridgedUdpConnection) return
+
+        // A REAL PV connection arrived for a player we created a fake bridged connection for
+        // (dual-mod player whose SVC voice connected first) — tear the fake down and continue
+        // with normal registration.
         if (bridgedConnections.containsKey(playerUuid)) {
             removeFakeConnection(playerUuid)
             logger.info("Replaced fake bridged connection with real PV connection for $playerUuid")
