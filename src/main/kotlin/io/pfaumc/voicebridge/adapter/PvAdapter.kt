@@ -400,6 +400,16 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         bridgedConnections[playerUuid] = connection.secret
         voiceServer.udpConnectionManager.addConnection(connection)
 
+        // SVC players never do the PV client handshake, so PV marks them voice-disabled and
+        // PV clients hide their mic icons. Flip the flag (the setter lives on the impl class,
+        // not the API interface → reflection) and re-broadcast the player info below so PV
+        // clients render them as voice-enabled.
+        runCatching {
+            voicePlayer.javaClass.methods
+                .firstOrNull { it.name == "setVoiceDisabled" }
+                ?.invoke(voicePlayer, false)
+        }
+
         // Broadcast player info to all PV clients so they see a voice icon.
         // addConnection() alone only registers internally; the PlayerInfoUpdatePacket
         // must be sent explicitly for clients to update their player list.
