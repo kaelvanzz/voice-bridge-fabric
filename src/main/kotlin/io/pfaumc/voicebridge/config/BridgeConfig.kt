@@ -16,6 +16,7 @@ data class BridgeConfig(
     val forceTranscode: Boolean = false,
     val repacing: Boolean = true,
     val repacingJitterFrames: Int = 2,
+    val groupsEnabled: Boolean = true,
     val worldOverrides: Map<String, Double> = emptyMap()
 ) {
     companion object {
@@ -71,6 +72,7 @@ data class BridgeConfig(
                 forceTranscode = audio.bool("force-transcode", false),
                 repacing = audio.bool("repacing", true),
                 repacingJitterFrames = audio.int("jitter-frames", 2),
+                groupsEnabled = bridge.bool("groups-enabled", true),
                 worldOverrides = worldOverrides
             )
         }
@@ -80,6 +82,9 @@ data class BridgeConfig(
             bridge:
               enabled: true
               debug: false
+              # Bridge SVC groups and Plasmo Voice group channels (requires the official
+              # pv-addon-groups server addon to be installed alongside Plasmo Voice)
+              groups-enabled: true
 
             proximity:
               # Default voice distance in blocks

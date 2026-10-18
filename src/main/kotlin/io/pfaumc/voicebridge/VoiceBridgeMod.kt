@@ -4,6 +4,7 @@ import io.pfaumc.voicebridge.adapter.PvAdapter
 import io.pfaumc.voicebridge.adapter.SvcAdapter
 import io.pfaumc.voicebridge.command.VoiceBridgeCommand
 import io.pfaumc.voicebridge.config.BridgeConfig
+import io.pfaumc.voicebridge.group.GroupBridge
 import io.pfaumc.voicebridge.relay.AudioRelay
 import io.pfaumc.voicebridge.session.ModType
 import io.pfaumc.voicebridge.session.SessionManager
@@ -34,6 +35,8 @@ class VoiceBridgeMod : ModInitializer {
         private set
     lateinit var audioRelay: AudioRelay
         private set
+    lateinit var groupBridge: GroupBridge
+        private set
 
     var server: MinecraftServer? = null
         private set
@@ -58,6 +61,7 @@ class VoiceBridgeMod : ModInitializer {
         sessionManager = SessionManager()
         spatialMapper = SpatialMapper(bridgeConfig)
         audioRelay = AudioRelay(sessionManager, spatialMapper, bridgeConfig, ::isDebug)
+        groupBridge = GroupBridge(this)
 
         // Initialize adapters.
         // SVC instantiates SvcAdapter itself via the "voicechat" entrypoint in fabric.mod.json;

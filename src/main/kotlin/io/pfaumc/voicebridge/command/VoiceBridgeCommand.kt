@@ -48,6 +48,10 @@ object VoiceBridgeCommand {
                     .executes { showPlayers(it) }
             )
             .then(
+                Commands.literal("groups")
+                    .executes { showGroups(it) }
+            )
+            .then(
                 Commands.literal("reload")
                     .executes { reloadConfig(it) }
             )
@@ -171,6 +175,37 @@ object VoiceBridgeCommand {
         return Command.SINGLE_SUCCESS
     }
 
+    private fun showGroups(ctx: CommandContext<CommandSourceStack>): Int {
+        val bridge = VoiceBridgeMod.instance?.groupBridge
+        if (bridge == null || !bridge.isAvailable()) {
+            ctx.source.sendSuccess(
+                {
+                    Component.literal("Group bridging is not active. It requires the official pv-addon-groups server addon and groups-enabled: true in config.").withStyle(LABEL)
+                },
+                false
+            )
+            return Command.SINGLE_SUCCESS
+        }
+        val groups = bridge.bridgedGroupNames()
+        val lines = mutableListOf<Component>()
+        if (groups.isEmpty()) {
+            lines += Component.literal("  No bridged groups. Create groups with the same name in SVC and PV (via /groups).").withStyle(LABEL)
+        } else {
+            lines += header("Bridged Groups (${groups.size})")
+            for ((name, svcCount, pvCount) in groups) {
+                lines += Component.literal("  ").withStyle(LABEL)
+                    .append(Component.literal(name).withStyle(VALUE))
+                    .append(Component.literal("  [SVC: ").withStyle(LABEL))
+                    .append(Component.literal("$svcCount").withStyle(SVC_COLOR))
+                    .append(Component.literal(" | PV: ").withStyle(LABEL))
+                    .append(Component.literal("$pvCount").withStyle(PV_COLOR))
+                    .append(Component.literal("]").withStyle(LABEL))
+            }
+        }
+        ctx.source.sendSuccess({ ComponentUtils.formatList(lines, Component.literal("\n")) }, false)
+        return Command.SINGLE_SUCCESS
+    }
+
     private fun reloadConfig(ctx: CommandContext<CommandSourceStack>): Int {
         VoiceBridgeMod.instance?.reloadBridgeConfig()
         ctx.source.sendSuccess(
@@ -215,6 +250,7 @@ object VoiceBridgeCommand {
                         header("Voice Bridge Commands"),
                         cmdLine("/vb status", "Show bridge status and metrics"),
                         cmdLine("/vb players", "List connected players and their voice mod"),
+                        cmdLine("/vb groups", "List bridged SVC/PV groups"),
                         cmdLine("/vb reload", "Reload configuration"),
                         cmdLine("/vb debug", "Toggle debug logging", "on", "off"),
                     ),

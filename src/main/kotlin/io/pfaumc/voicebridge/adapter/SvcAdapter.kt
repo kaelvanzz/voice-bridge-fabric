@@ -35,6 +35,9 @@ class SvcAdapter : VoicechatPlugin {
 
     private var serverApi: VoicechatServerApi? = null
 
+    /** Public accessor for other components (GroupBridge) that need the SVC server API. */
+    val voicechatApi: VoicechatServerApi? get() = serverApi
+
     // EntityAudioChannels for relaying PV player audio to SVC clients.
     // Key: PV player UUID (the "speaker").
     //
@@ -118,6 +121,9 @@ class SvcAdapter : VoicechatPlugin {
 
         // Signal audio end on PV side for this player's outbound source
         PvAdapter.instance?.cleanupSource(playerUuid)
+
+        // Group bridge cleanup
+        mod.groupBridge.onSvcPlayerDisconnected(playerUuid)
     }
 
     /**
@@ -143,7 +149,7 @@ class SvcAdapter : VoicechatPlugin {
         val api = serverApi ?: return
         val distance = api.voiceChatDistance.toFloat()
 
-        // Relay to PV players
+        // Relay to PV players (proximity)
         mod.audioRelay.relaySvcToPv(
             senderUuid = senderUuid,
             senderPlayer = senderPlayer,
@@ -152,6 +158,10 @@ class SvcAdapter : VoicechatPlugin {
             distance = distance,
             whispering = whispering
         )
+
+        // SVC group audio: relay to the matching PV group channel if one is bridged
+        val svcGroup = senderConnection.group ?: return
+        mod.groupBridge.relaySvcGroupToPv(senderUuid, senderPlayer, svcGroup, opusData)
     }
 
     // --- Outbound: Send audio FROM a PV player TO SVC clients ---

@@ -44,6 +44,9 @@ dependencies {
     compileOnly("su.plo.voice.api:common:${project.properties["plasmo.voice.version"]}")
     compileOnly("su.plo.voice:protocol:${project.properties["plasmo.voice.version"]}")
 
+    // pv-addon-groups (optional runtime dependency; group bridging auto-enables when installed)
+    compileOnly(files("libs/pv-addon-groups-1.1.1.jar"))
+
     // Bundled libraries
     implementation(kotlin("stdlib"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.10.1")
