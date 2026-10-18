@@ -5,6 +5,8 @@ import de.maxhenkel.voicechat.api.VoicechatPlugin
 import de.maxhenkel.voicechat.api.VoicechatServerApi
 import de.maxhenkel.voicechat.api.audiochannel.EntityAudioChannel
 import de.maxhenkel.voicechat.api.events.EventRegistration
+import de.maxhenkel.voicechat.api.events.JoinGroupEvent
+import de.maxhenkel.voicechat.api.events.LeaveGroupEvent
 import de.maxhenkel.voicechat.api.events.MicrophonePacketEvent
 import de.maxhenkel.voicechat.api.events.PlayerConnectedEvent
 import de.maxhenkel.voicechat.api.events.PlayerDisconnectedEvent
@@ -79,6 +81,8 @@ class SvcAdapter : VoicechatPlugin {
         registration.registerEvent(MicrophonePacketEvent::class.java, ::onMicrophonePacket, 0)
         registration.registerEvent(PlayerConnectedEvent::class.java, ::onPlayerConnected, 0)
         registration.registerEvent(PlayerDisconnectedEvent::class.java, ::onPlayerDisconnected, 0)
+        registration.registerEvent(JoinGroupEvent::class.java, ::onJoinGroup, 0)
+        registration.registerEvent(LeaveGroupEvent::class.java, ::onLeaveGroup, 0)
     }
 
     // --- Event Handlers ---
@@ -124,6 +128,18 @@ class SvcAdapter : VoicechatPlugin {
 
         // Group bridge cleanup
         mod.groupBridge.onSvcPlayerDisconnected(playerUuid)
+    }
+
+    private fun onJoinGroup(event: JoinGroupEvent) {
+        val mod = plugin ?: return
+        val group = event.group ?: return
+        val connection = event.connection ?: return
+        mod.groupBridge.onSvcJoinGroup(group, connection)
+    }
+
+    private fun onLeaveGroup(event: LeaveGroupEvent) {
+        val mod = plugin ?: return
+        mod.groupBridge.onSvcLeaveGroup(event.connection?.player?.uuid ?: return)
     }
 
     /**

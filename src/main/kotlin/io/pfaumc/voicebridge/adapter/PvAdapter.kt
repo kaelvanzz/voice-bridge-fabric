@@ -81,7 +81,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
     // secret by player id could target the wrong connection.
     private val bridgedConnections = ConcurrentHashMap<UUID, UUID>()
 
-    // One-shot diagnostics for the PV?’SVC chain (logged once, then suppressed)
+    // One-shot diagnostics for the PV?ï¿½SVC chain (logged once, then suppressed)
     @Volatile private var loggedActivationMismatch = false
     @Volatile private var loggedCastFailure = false
     @Volatile private var loggedFirstFrame = false
@@ -114,7 +114,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
             .getActivationByName("proximity")
             .orElse(null)
         if (proximityActivation == null) {
-            logger.warn("Proximity activation not found ??PV?’SVC bridge may not work")
+            logger.warn("Proximity activation not found ??PV?ï¿½SVC bridge may not work")
         }
 
         val cfg = plugin.bridgeConfig
@@ -219,7 +219,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
                 loggedActivationMismatch = true
                 logger.warn(
                     "PV activation event received but does not match our 'proximity' activation " +
-                        "(event=${event.activation?.javaClass?.simpleName}) ??PV?’SVC relay will not work"
+                        "(event=${event.activation?.javaClass?.simpleName}) ??PV?ï¿½SVC relay will not work"
                 )
             }
             return
@@ -248,14 +248,14 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         val senderPlayer = plugin.server?.playerList?.getPlayer(playerUuid) ?: run {
             if (!loggedCastFailure) {
                 loggedCastFailure = true
-                logger.warn("Could not find ServerPlayer for PV player ${player.instance.name} ??PV?’SVC relay will not work")
+                logger.warn("Could not find ServerPlayer for PV player ${player.instance.name} ??PV?ï¿½SVC relay will not work")
             }
             return
         }
 
         if (!loggedFirstFrame) {
             loggedFirstFrame = true
-            logger.info("PV?’SVC: received first audio frame from ${player.instance.name} (dist=$distance)")
+            logger.info("PV?ï¿½SVC: received first audio frame from ${player.instance.name} (dist=$distance)")
         }
 
         // Relay to SVC players via AudioRelay
@@ -305,13 +305,14 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         if (entry != null && (entry.entity !== senderPlayer || entry.level !== currentLevel)) {
             runCatching { entry.source.remove() }
             outboundSources.remove(senderUuid, entry)
-            logger.debug("SVC?’PV: stale entity source for $senderUuid (entity/level changed), recreating")
+            logger.debug("SVC?ï¿½PV: stale entity source for $senderUuid (entity/level changed), recreating")
             entry = null
         }
 
         if (entry == null) {
             val mcEntity = voiceServer.minecraftServer.getPlayerByInstance(senderPlayer)
             val created = line.createEntitySource(mcEntity, false).apply {
+                isIconVisible = true
                 // Exclude dual-mod players ??they already hear SVC audio natively
                 addFilter<VoicePlayer> { player -> !plugin.sessionManager.isDualMod(player.instance.uuid) }
             }
@@ -356,7 +357,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         try {
             source.sendAudioFrame(encryptedData, seq, distance)
         } catch (t: Throwable) {
-            logger.debug("SVC?’PV: send failed for $senderUuid: ${t.message}")
+            logger.debug("SVC?ï¿½PV: send failed for $senderUuid: ${t.message}")
             BridgeMetrics.droppedFrames.incrementAndGet()
         }
     }
