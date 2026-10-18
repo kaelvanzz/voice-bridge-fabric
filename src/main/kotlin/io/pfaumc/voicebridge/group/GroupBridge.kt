@@ -11,6 +11,7 @@ import org.slf4j.LoggerFactory
 import su.plo.voice.api.server.audio.capture.PlayerActivationInfo
 import su.plo.voice.api.server.audio.line.BaseServerSourceLine
 import su.plo.voice.api.server.audio.source.ServerBroadcastSource
+import su.plo.voice.api.server.audio.source.ServerPlayerSource
 import su.plo.voice.api.server.player.VoicePlayer
 import su.plo.voice.groups.GroupsAddon
 import su.plo.voice.groups.group.Group as PvGroup
@@ -24,12 +25,21 @@ import java.util.concurrent.ConcurrentHashMap
  * [pv-addon-groups](https://modrinth.com/plugin/pv-addon-groups) server addon.
  *
  * A group is "bridged" when an SVC group and a PV group share the same name
- * (case-insensitive). Matching is resolved live at event time on both sides ?? * no member lists are cached:
+ * (case-insensitive). Matching is resolved live at event time on both sides —
+ * no member lists are cached.
  *
+ * SVC group members are also mirrored onto the PV group's roster (playersIds +
+ * playerSet + the groups line's player list) so PV clients display them as group
+ * members with speaking icons.
+ *
+ * Audio:
  * - SVC group member speaks: SVC delivers to SVC members natively; this bridge
- *   delivers the encrypted frame to the matching PV group's online members via a
- *   per-speaker broadcast source on the groups addon's source line (non-positional,
- *   works across dimensions).
+ *   relays the encrypted frame to the matching PV group's online members. Same-
+ *   dimension members receive it through a player source (PlayerSourceInfo, which
+ *   PV clients index per player -> name-tag mic icon + overlay attribution);
+ *   members in other dimensions receive it through a broadcast source
+ *   (non-positional, cross-dimension, no positional icon — same as the groups
+ *   addon's own delivery).
  * - PV group member speaks (their "Groups" activation): PV delivers to PV members
  *   natively; this bridge delivers the decrypted frame to each SVC group member's
  *   connection via a non-positional static audio channel.
@@ -45,13 +55,18 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         true
     }.getOrDefault(false)
 
-    /** SVC speaker -> broadcast source used to reach the matching PV group. */
-    private val svcBroadcastSources = ConcurrentHashMap<UUID, ServerBroadcastSource>()
+    private class GroupSources(
+        val entity: net.minecraft.server.level.ServerPlayer,
+        val level: net.minecraft.server.level.ServerLevel,
+        val playerSource: ServerPlayerSource?,
+        val broadcastSource: ServerBroadcastSource
+    )
 
-    /** PV speaker -> (SVC listener -> static channel used to reach that listener). */
+    private val svcGroupSources = ConcurrentHashMap<UUID, GroupSources>()
+
     private val staticChannels = ConcurrentHashMap<UUID, ConcurrentHashMap<UUID, StaticAudioChannel>>()
 
-    /** SVC players currently added to a PV group roster (uuid -> bridged group name). */
+    /** SVC players currently mirrored onto a PV group roster (uuid -> bridged group name). */
     private val svcRoster = ConcurrentHashMap<UUID, String>()
 
     private fun pvAddon(): GroupsAddon? {
@@ -60,7 +75,8 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         return runCatching {
             val container = PvAdapter.instance?.voiceServer?.addonManager?.getAddon(ADDON_ID)?.orElse(null) ?: return null
             val addon = container.getInstance().orElse(null) as? GroupsAddon ?: return null
-            // Accessing groupManager throws if the groups addon has not initialized yet ??            // the outer runCatching turns that into "feature not ready".
+            // Accessing groupManager throws while the groups addon has not initialized yet —
+            // the outer runCatching turns that into "feature not ready".
             addon.groupManager
             addon
         }.getOrNull()
@@ -68,23 +84,16 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
     fun isAvailable(): Boolean = pvAddon() != null
 
-    /** The groups addon's own source line ??group audio rides on it so clients get a single "Groups" volume entry. */
     private fun groupsSourceLine(addon: GroupsAddon): BaseServerSourceLine? =
         runCatching { addon.groupManager.sourceLine }.getOrNull()
-
-    // ------------------------------------------------------------------
-    // Lookups
-    // ------------------------------------------------------------------
 
     private fun findPvGroup(addon: GroupsAddon, name: String): PvGroup? =
         addon.groupManager.groups.values
             .filter { it.name.equals(name, ignoreCase = true) }
             .firstOrNull { it.onlinePlayers.isNotEmpty() }
 
-    private fun findSvcGroup(name: String): SvcGroup? =
-        svcApi()?.groups?.firstOrNull { it.name.equals(name, ignoreCase = true) }
+    private fun svcApi() = mod.audioRelay.svcAdapter?.voicechatApi
 
-    /** SVC connections whose native group matches [svcGroup] (SVC group members online in voice). */
     private fun svcMembersOf(svcGroup: SvcGroup, api: de.maxhenkel.voicechat.api.VoicechatServerApi): List<VoicechatConnection> =
         mod.sessionManager.getAllSessions()
             .asSequence()
@@ -92,8 +101,6 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
             .mapNotNull { api.getConnectionOf(it.playerUuid) }
             .filter { it.group?.id == svcGroup.id }
             .toList()
-
-    private fun svcApi() = mod.audioRelay.svcAdapter?.voicechatApi
 
     // ------------------------------------------------------------------
     // SVC group member speaks -> PV group members
@@ -104,10 +111,11 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         val line = groupsSourceLine(addon) ?: return
         val pvAdapter = PvAdapter.instance ?: return
 
-        val pvGroup = addon.groupManager.groupByPlayer[speakerUuid]?.takeIf { it.name.equals(svcGroup.name, ignoreCase = true) }
-            ?: findPvGroup(addon, svcGroup.name) ?: return
+        val pvGroup = findPvGroupForSpeaker(addon, speakerUuid, svcGroup.name) ?: return
         val members = pvGroup.onlinePlayers.toList()
         if (members.isEmpty()) return
+
+        lazyRosterAdd(pvAdapter, addon, pvGroup, svcGroup.name, speakerUuid, speakerPlayer)
 
         val encrypted = try {
             pvAdapter.voiceServer.defaultEncryption.encrypt(opusData)
@@ -117,30 +125,99 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
             return
         }
 
-        val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
-        val source = svcBroadcastSources.computeIfAbsent(speakerUuid) {
-            line.createBroadcastSource().also { source ->
-                source.sender = speakerVoice
-                source.isIconVisible = true
-                source.addFilter<VoicePlayer> { it.instance.uuid != speakerUuid }
-                logger.debug("Group SVC->PV: created broadcast source for $speakerUuid")
+        val speakerLevel = runCatching { speakerPlayer.serverLevel() }.getOrNull() ?: return
+        var entry = svcGroupSources[speakerUuid]
+            ?.takeIf { it.entity === speakerPlayer && it.level === speakerLevel }
+        if (entry == null) {
+            entry = createGroupSources(line, pvAdapter, speakerUuid, speakerPlayer, speakerLevel)
+            svcGroupSources[speakerUuid] = entry
+        }
+
+        val seq = groupSequenceNumbers.merge(speakerUuid, 1L) { current, _ -> current + 1 } ?: 1L
+
+        // Same-dimension members: player source. PlayerSourceInfo is indexed per player on
+        // the client, which drives the name-tag mic icon and the overlay attribution.
+        entry.playerSource?.let { ps ->
+            try {
+                ps.sendAudioFrame(encrypted, seq, Short.MAX_VALUE)
+                BridgeMetrics.svcToPlasmoFrames.incrementAndGet()
+            } catch (t: Throwable) {
+                logger.debug("Group SVC->PV: player-source send failed for $speakerUuid: ${t.message}")
+                BridgeMetrics.droppedFrames.incrementAndGet()
             }
         }
 
-        source.players = members
-        val seq = groupSequenceNumbers.merge(speakerUuid, 1L) { current, _ -> current + 1 } ?: 1L
-
-        // Same send path the groups addon itself uses: a SourceAudioPacket delivered by the
-        // broadcast source to its explicit player set (non-positional, cross-dimension).
-        val sourcePacket = SourceAudioPacket(seq, source.state.toByte(), encrypted, source.id, 0)
-        val speakerPacket = PlayerAudioPacket(seq, encrypted, pvGroup.id, 0, false)
-        try {
-            source.sendAudioPacket(sourcePacket, PlayerActivationInfo(speakerVoice, speakerPacket))
-            BridgeMetrics.svcToPlasmoFrames.incrementAndGet()
-        } catch (t: Throwable) {
-            logger.debug("Group SVC->PV: send failed for $speakerUuid: ${t.message}")
-            BridgeMetrics.droppedFrames.incrementAndGet()
+        // Cross-dimension members: broadcast source (non-positional, no name-tag icon —
+        // matches the groups addon's own cross-dimension delivery).
+        val others = members.filter { memberLevel(it) !== speakerLevel }
+        if (others.isNotEmpty()) {
+            entry.broadcastSource.players = others
+            val sourcePacket = SourceAudioPacket(seq, entry.broadcastSource.state.toByte(), encrypted, entry.broadcastSource.id, 0)
+            val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
+            val speakerPacket = PlayerAudioPacket(seq, encrypted, pvGroup.id, 0, false)
+            try {
+                entry.broadcastSource.sendAudioPacket(sourcePacket, PlayerActivationInfo(speakerVoice, speakerPacket))
+                BridgeMetrics.svcToPlasmoFrames.incrementAndGet()
+            } catch (t: Throwable) {
+                logger.debug("Group SVC->PV: broadcast send failed for $speakerUuid: ${t.message}")
+                BridgeMetrics.droppedFrames.incrementAndGet()
+            }
         }
+    }
+
+    private fun findPvGroupForSpeaker(addon: GroupsAddon, speakerUuid: UUID, name: String): PvGroup? =
+        addon.groupManager.groupByPlayer[speakerUuid]
+            ?.takeIf { it.name.equals(name, ignoreCase = true) }
+            ?: findPvGroup(addon, name)
+
+    private fun createGroupSources(
+        line: BaseServerSourceLine,
+        pvAdapter: PvAdapter,
+        speakerUuid: UUID,
+        speakerPlayer: net.minecraft.server.level.ServerPlayer,
+        speakerLevel: net.minecraft.server.level.ServerLevel
+    ): GroupSources {
+        val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
+
+        // createPlayerSource exists on the runtime line class but not on the 2.1.8 API
+        // interface this jar compiles against -> reflection, graceful null on older PV.
+        val playerSource = runCatching {
+            line.javaClass.methods.firstOrNull { it.name == "createPlayerSource" }
+                ?.invoke(line, speakerVoice, false, null, null) as? ServerPlayerSource
+        }.getOrNull()?.apply {
+            isIconVisible = true
+            addFilter<VoicePlayer> { vp -> isSameDimension(vp, speakerLevel) }
+        }
+
+        val broadcast = line.createBroadcastSource().also { source ->
+            source.sender = speakerVoice
+            source.isIconVisible = true
+            source.addFilter<VoicePlayer> { vp ->
+                // With a player source active it owns same-dimension delivery; the broadcast
+                // source only reaches members in other dimensions. Without one (older PV),
+                // the broadcast reaches everyone but the speaker.
+                if (playerSource != null) !isSameDimension(vp, speakerLevel) else vp.instance.uuid != speakerUuid
+            }
+        }
+
+        logger.debug("Group SVC->PV: created group sources for $speakerUuid (playerSource=${playerSource != null})")
+        return GroupSources(speakerPlayer, speakerLevel, playerSource, broadcast)
+    }
+
+    private fun isSameDimension(vp: VoicePlayer, level: net.minecraft.server.level.ServerLevel): Boolean =
+        mod.server?.playerList?.getPlayer(vp.instance.uuid)
+            ?.let { runCatching { it.serverLevel() }.getOrNull() } === level
+
+    private fun memberLevel(vp: VoicePlayer): net.minecraft.server.level.ServerLevel? =
+        mod.server?.playerList?.getPlayer(vp.instance.uuid)?.let { runCatching { it.serverLevel() }.getOrNull() }
+
+    private fun lazyRosterAdd(pvAdapter: PvAdapter, addon: GroupsAddon, pvGroup: PvGroup, groupName: String, speakerUuid: UUID, speakerPlayer: net.minecraft.server.level.ServerPlayer) {
+        if (pvGroup.playersIds.contains(speakerUuid)) return
+        val voicePlayer = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer) ?: return
+        pvGroup.addPlayer(voicePlayer)
+        registerOnGroupsLine(addon, pvGroup, voicePlayer)
+        svcRoster[speakerUuid] = groupName
+        logger.debug("Group bridge: added SVC speaker $speakerUuid to PV group '${pvGroup.name}' roster")
     }
 
     // ------------------------------------------------------------------
@@ -189,26 +266,13 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
     }
 
     // ------------------------------------------------------------------
-    // Lifecycle
+    // Roster sync (SVC group membership -> PV group roster + line player list)
     // ------------------------------------------------------------------
 
-    fun onPvPlayerDisconnected(playerUuid: UUID) {
-        svcBroadcastSources.remove(playerUuid)
-        staticChannels.remove(playerUuid)?.values?.forEach { runCatching { it.flush() } }
-        groupSequenceNumbers.remove(playerUuid)
-    }
-
-    fun onSvcPlayerDisconnected(playerUuid: UUID) {
-        onSvcLeaveGroup(playerUuid)
-        svcBroadcastSources.remove(playerUuid)
-        staticChannels.values.forEach { listeners ->
-            listeners.remove(playerUuid)?.let { runCatching { it.flush() } }
-        }
-    }
-
     /**
-     * Add the SVC player to the matching PV group's roster so PV clients display them as a
-     * group member (group UI, speaking icons). Called from the SVC JoinGroup event.
+     * Add the SVC player to the matching PV group's roster AND register them on the groups
+     * line's player list (setPlayerSet), which is what PV clients render in the overlay's
+     * group list. Called from the SVC JoinGroup event.
      */
     fun onSvcJoinGroup(svcGroup: SvcGroup, connection: VoicechatConnection) {
         val addon = pvAddon() ?: return
@@ -218,6 +282,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         val mcPlayer = connection.player.player ?: return
         val voicePlayer = PvAdapter.instance?.voiceServer?.playerManager?.getPlayerByInstance(mcPlayer) ?: return
         pvGroup.addPlayer(voicePlayer)
+        registerOnGroupsLine(addon, pvGroup, voicePlayer)
         svcRoster[playerUuid] = svcGroup.name
         logger.debug("Group bridge: added SVC player $playerUuid to PV group '${pvGroup.name}' roster")
     }
@@ -227,20 +292,66 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         val groupName = svcRoster.remove(playerUuid) ?: return
         val addon = pvAddon() ?: return
         val pvGroup = addon.groupManager.groups.values.firstOrNull { it.name.equals(groupName, ignoreCase = true) } ?: return
-        if (pvGroup.playersIds.contains(playerUuid)) {
-            pvGroup.removePlayer(playerUuid)
-            logger.debug("Group bridge: removed SVC player $playerUuid from PV group '$groupName' roster")
+        if (!pvGroup.playersIds.contains(playerUuid)) return
+
+        val line = addon.groupManager.sourceLine
+        val voicePlayer = mod.server?.playerList?.getPlayer(playerUuid)?.let { mc ->
+            PvAdapter.instance?.voiceServer?.playerManager?.getPlayerByInstance(mc)
+        }
+        pvGroup.removePlayer(playerUuid)
+        // Clear the player's set on the groups line (mirrors the groups addon's leave path).
+        runCatching { voicePlayer?.let { vp -> line?.playerSetManager?.setPlayerSet(vp, null) } }
+        logger.debug("Group bridge: removed SVC player $playerUuid from PV group '$groupName' roster")
+    }
+
+    /**
+     * Register the player on the groups line's player list via setPlayerSet — the same call
+     * the groups addon performs when a member joins; it triggers the
+     * SourceLinePlayersListPacket / SourceLinePlayerAddPacket updates that PV clients use
+     * to render the group member list in the overlay.
+     */
+    private fun registerOnGroupsLine(addon: GroupsAddon?, pvGroup: PvGroup, voicePlayer: VoicePlayer) {
+        runCatching {
+            val line = addon?.groupManager?.sourceLine
+                ?: PvAdapter.instance?.voiceServer?.sourceLineManager?.getLineByName("groups")?.orElse(null)
+            line?.playerSetManager?.setPlayerSet(voicePlayer, pvGroup.playerSet)
         }
     }
 
+    // ------------------------------------------------------------------
+    // Lifecycle
+    // ------------------------------------------------------------------
+
+    fun onPvPlayerDisconnected(playerUuid: UUID) {
+        removeGroupSources(playerUuid)
+        staticChannels.remove(playerUuid)?.values?.forEach { runCatching { it.flush() } }
+        groupSequenceNumbers.remove(playerUuid)
+    }
+
+    fun onSvcPlayerDisconnected(playerUuid: UUID) {
+        onSvcLeaveGroup(playerUuid)
+        removeGroupSources(playerUuid)
+        staticChannels.values.forEach { listeners ->
+            listeners.remove(playerUuid)?.let { runCatching { it.flush() } }
+        }
+    }
+
+    private fun removeGroupSources(playerUuid: UUID) {
+        val entry = svcGroupSources.remove(playerUuid) ?: return
+        val line = pvAddon()?.let { groupsSourceLine(it) }
+        entry.playerSource?.let { runCatching { line?.removeSource(it.id) } }
+        runCatching { line?.removeSource(entry.broadcastSource.id) }
+    }
+
     fun shutdown() {
-        svcBroadcastSources.clear()
+        svcGroupSources.clear()
         staticChannels.values.forEach { listeners -> listeners.values.forEach { runCatching { it.flush() } } }
         staticChannels.clear()
+        svcRoster.clear()
         groupSequenceNumbers.clear()
     }
 
-    /** Bridged group names (SVC group and PV group with the same name both exist). */
+    /** Bridged groups (SVC group and PV group with the same name both exist). */
     fun bridgedGroupNames(): List<Triple<String, Int, Int>> {
         val addon = pvAddon() ?: return emptyList()
         val api = svcApi() ?: return emptyList()
