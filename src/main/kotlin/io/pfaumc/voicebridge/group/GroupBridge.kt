@@ -200,7 +200,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
             }
         }
 
-        logger.debug("Group SVC->PV: created group sources for $speakerUuid (playerSource=${playerSource != null})")
+        logger.info("Group SVC->PV: created group sources for $speakerUuid (playerSource=${playerSource != null})")
         return GroupSources(speakerPlayer, speakerLevel, playerSource, broadcast)
     }
 
