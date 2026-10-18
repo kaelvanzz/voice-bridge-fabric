@@ -276,8 +276,17 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
      */
     fun onSvcJoinGroup(svcGroup: SvcGroup, connection: VoicechatConnection) {
         val addon = pvAddon() ?: return
-        val pvGroup = addon.groupManager.groups.values.firstOrNull { it.name.equals(svcGroup.name, ignoreCase = true) } ?: return
+        val pvGroup = addon.groupManager.groups.values.firstOrNull { it.name.equals(svcGroup.name, ignoreCase = true) }
         val playerUuid = connection.player.uuid
+
+        if (pvGroup == null) {
+            // No PV group with this name yet — guide the SVC player on how PV players join.
+            sendChat(
+                connection.player.player,
+                "PV players can join this group by creating a group with the same name: /groups create name: ${svcGroup.name}"
+            )
+            return
+        }
         if (pvGroup.playersIds.contains(playerUuid)) return
         val mcPlayer = connection.player.player ?: return
         val voicePlayer = PvAdapter.instance?.voiceServer?.playerManager?.getPlayerByInstance(mcPlayer) ?: return
@@ -285,6 +294,33 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         registerOnGroupsLine(addon, pvGroup, voicePlayer)
         svcRoster[playerUuid] = svcGroup.name
         logger.debug("Group bridge: added SVC player $playerUuid to PV group '${pvGroup.name}' roster")
+    }
+
+    fun onSvcCreateGroup(svcGroup: SvcGroup?, connection: VoicechatConnection?) {
+        if (svcGroup == null) return
+        val addon = pvAddon() ?: return
+        if (addon.groupManager.groups.values.any { it.name.equals(svcGroup.name, ignoreCase = true) }) return
+        val target = connection?.player?.player ?: return
+        sendChat(
+            target,
+            "PV players can join this group by creating a group with the same name: /groups create name: ${svcGroup.name}"
+        )
+    }
+
+    /**
+     * Send a chat line through slib's McPlayer.sendMessage(McTextComponent). The method only
+     * exists on the slib version bundled with modern PV (not on the 1.1.7 API this jar
+     * compiles against) -> reflection, silent no-op when unavailable.
+     */
+    private fun sendChat(mcPlayer: Any?, text: String) {
+        if (mcPlayer == null) return
+        runCatching {
+            val compClass = Class.forName("su.plo.slib.api.chat.component.McTextComponent")
+            val component = compClass.getDeclaredMethod("literal", String::class.java).invoke(null, text)
+            mcPlayer.javaClass.methods
+                .firstOrNull { it.name == "sendMessage" && it.parameterCount == 1 && it.parameterTypes[0] == compClass }
+                ?.invoke(mcPlayer, component)
+        }
     }
 
     /** Remove the SVC player from the PV group roster they were added to (SVC LeaveGroup event or disconnect). */
