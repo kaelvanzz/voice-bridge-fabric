@@ -192,6 +192,11 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         val broadcast = line.createBroadcastSource().also { source ->
             source.sender = speakerVoice
             source.isIconVisible = true
+            // Camera-relative at zero offset: the audio anchors to each listener's camera,
+            // so it plays at full volume regardless of distance AND dimension (a plain
+            // positional broadcast would fade out with distance to the speaker's coords).
+            source.isCameraRelative = true
+            source.relativePosition = su.plo.slib.api.position.Pos3d(0.0, 0.0, 0.0)
             source.addFilter<VoicePlayer> { vp ->
                 // With a player source active, it owns near delivery (positional, with
                 // icons); the broadcast source reaches everyone else: members far away and
