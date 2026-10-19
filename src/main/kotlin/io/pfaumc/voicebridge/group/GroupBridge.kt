@@ -25,8 +25,7 @@ import java.util.concurrent.ConcurrentHashMap
  * [pv-addon-groups](https://modrinth.com/plugin/pv-addon-groups) server addon.
  *
  * A group is "bridged" when an SVC group and a PV group share the same name
- * (case-insensitive). Matching is resolved live at event time on both sides —
- * no member lists are cached.
+ * (case-insensitive). Matching is resolved live at event time on both sides ?? * no member lists are cached.
  *
  * SVC group members are also mirrored onto the PV group's roster (playersIds +
  * playerSet + the groups line's player list) so PV clients display them as group
@@ -38,7 +37,7 @@ import java.util.concurrent.ConcurrentHashMap
  *   dimension members receive it through a player source (PlayerSourceInfo, which
  *   PV clients index per player -> name-tag mic icon + overlay attribution);
  *   members in other dimensions receive it through a broadcast source
- *   (non-positional, cross-dimension, no positional icon — same as the groups
+ *   (non-positional, cross-dimension, no positional icon ??same as the groups
  *   addon's own delivery).
  * - PV group member speaks (their "Groups" activation): PV delivers to PV members
  *   natively; this bridge delivers the decrypted frame to each SVC group member's
@@ -75,8 +74,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         return runCatching {
             val container = PvAdapter.instance?.voiceServer?.addonManager?.getAddon(ADDON_ID)?.orElse(null) ?: return null
             val addon = container.getInstance().orElse(null) as? GroupsAddon ?: return null
-            // Accessing groupManager throws while the groups addon has not initialized yet —
-            // the outer runCatching turns that into "feature not ready".
+            // Accessing groupManager throws while the groups addon has not initialized yet ??            // the outer runCatching turns that into "feature not ready".
             addon.groupManager
             addon
         }.getOrNull()
@@ -135,8 +133,8 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
         val seq = groupSequenceNumbers.merge(speakerUuid, 1L) { current, _ -> current + 1 } ?: 1L
 
-        // Same-dimension members: player source. PlayerSourceInfo is indexed per player on
-        // the client, which drives the name-tag mic icon and the overlay attribution.
+        // Near members: player source (PlayerSourceInfo -> client-side speaker attribution:
+        // name-tag mic icon + overlay entry). Positional, but they are within voice range.
         entry.playerSource?.let { ps ->
             try {
                 ps.sendAudioFrame(encrypted, seq, Short.MAX_VALUE)
@@ -147,21 +145,20 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
             }
         }
 
-        // Cross-dimension members: broadcast source (non-positional, no name-tag icon —
-        // matches the groups addon's own cross-dimension delivery).
-        val others = members.filter { memberLevel(it) !== speakerLevel }
-        if (others.isNotEmpty()) {
-            entry.broadcastSource.players = others
-            val sourcePacket = SourceAudioPacket(seq, entry.broadcastSource.state.toByte(), encrypted, entry.broadcastSource.id, 0)
-            val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
-            val speakerPacket = PlayerAudioPacket(seq, encrypted, pvGroup.id, 0, false)
-            try {
-                entry.broadcastSource.sendAudioPacket(sourcePacket, PlayerActivationInfo(speakerVoice, speakerPacket))
-                BridgeMetrics.svcToPlasmoFrames.incrementAndGet()
-            } catch (t: Throwable) {
-                logger.debug("Group SVC->PV: broadcast send failed for $speakerUuid: ${t.message}")
-                BridgeMetrics.droppedFrames.incrementAndGet()
-            }
+        // Far / cross-dimension members: broadcast source (non-positional, full volume, no
+        // name-tag icon ??same as the groups addon's own cross-dimension delivery). The
+        // source filter decides the split per delivery, so members walking away switch over
+        // automatically.
+        entry.broadcastSource.players = members
+        val sourcePacket = SourceAudioPacket(seq, entry.broadcastSource.state.toByte(), encrypted, entry.broadcastSource.id, 0)
+        val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
+        val speakerPacket = PlayerAudioPacket(seq, encrypted, pvGroup.id, 0, false)
+        try {
+            entry.broadcastSource.sendAudioPacket(sourcePacket, PlayerActivationInfo(speakerVoice, speakerPacket))
+            BridgeMetrics.svcToPlasmoFrames.incrementAndGet()
+        } catch (t: Throwable) {
+            logger.debug("Group SVC->PV: broadcast send failed for $speakerUuid: ${t.message}")
+            BridgeMetrics.droppedFrames.incrementAndGet()
         }
     }
 
@@ -178,6 +175,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         speakerLevel: net.minecraft.server.level.ServerLevel
     ): GroupSources {
         val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
+        val thresholdSq = mod.bridgeConfig.defaultDistance * mod.bridgeConfig.defaultDistance
 
         // createPlayerSource exists on the runtime line class but not on the 2.1.8 API
         // interface this jar compiles against -> reflection, graceful null on older PV.
@@ -186,21 +184,28 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
                 ?.invoke(line, speakerVoice, false, null, null) as? ServerPlayerSource
         }.getOrNull()?.apply {
             isIconVisible = true
-            addFilter<VoicePlayer> { vp -> isSameDimension(vp, speakerLevel) }
+            addFilter<VoicePlayer> { vp ->
+                isSameDimension(vp, speakerLevel) && isWithinSpeakerRange(vp, speakerVoice, thresholdSq)
+            }
         }
 
         val broadcast = line.createBroadcastSource().also { source ->
             source.sender = speakerVoice
             source.isIconVisible = true
             source.addFilter<VoicePlayer> { vp ->
-                // With a player source active it owns same-dimension delivery; the broadcast
-                // source only reaches members in other dimensions. Without one (older PV),
-                // the broadcast reaches everyone but the speaker.
-                if (playerSource != null) !isSameDimension(vp, speakerLevel) else vp.instance.uuid != speakerUuid
+                // With a player source active, it owns near delivery (positional, with
+                // icons); the broadcast source reaches everyone else: members far away and
+                // in other dimensions. Without a player source (older PV), the broadcast
+                // reaches everyone but the speaker.
+                if (playerSource != null) {
+                    !isSameDimension(vp, speakerLevel) || !isWithinSpeakerRange(vp, speakerVoice, thresholdSq)
+                } else {
+                    vp.instance.uuid != speakerUuid
+                }
             }
         }
 
-        logger.info("Group SVC->PV: created group sources for $speakerUuid (playerSource=${playerSource != null})")
+        logger.debug("Group SVC->PV: created group sources for $speakerUuid (playerSource=${playerSource != null})")
         return GroupSources(speakerPlayer, speakerLevel, playerSource, broadcast)
     }
 
@@ -208,8 +213,16 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         mod.server?.playerList?.getPlayer(vp.instance.uuid)
             ?.let { runCatching { it.serverLevel() }.getOrNull() } === level
 
-    private fun memberLevel(vp: VoicePlayer): net.minecraft.server.level.ServerLevel? =
-        mod.server?.playerList?.getPlayer(vp.instance.uuid)?.let { runCatching { it.serverLevel() }.getOrNull() }
+    /** Near enough the speaker that positional audio is audible; beyond it the broadcast
+     *  source takes over (non-positional, full volume). */
+    private fun isWithinSpeakerRange(vp: VoicePlayer, speakerVoice: VoicePlayer?, thresholdSq: Double): Boolean {
+        if (speakerVoice == null) return true
+        val memberPos = (vp.instance as? su.plo.slib.api.server.entity.player.McServerPlayer)?.getServerPosition()
+            ?: return true
+        val speakerPos = (speakerVoice.instance as? su.plo.slib.api.server.entity.player.McServerPlayer)?.getServerPosition()
+            ?: return true
+        return memberPos.distanceSquared(speakerPos) <= thresholdSq
+    }
 
     private fun lazyRosterAdd(pvAdapter: PvAdapter, addon: GroupsAddon, pvGroup: PvGroup, groupName: String, speakerUuid: UUID, speakerPlayer: net.minecraft.server.level.ServerPlayer) {
         if (pvGroup.playersIds.contains(speakerUuid)) return
@@ -280,7 +293,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         val playerUuid = connection.player.uuid
 
         if (pvGroup == null) {
-            // No PV group with this name yet — guide the SVC player on how PV players join.
+            // No PV group with this name yet ??guide the SVC player on how PV players join.
             sendChat(
                 connection.player.player,
                 "PV players can join this group by creating a group with the same name: /groups create name: ${svcGroup.name}"
@@ -341,7 +354,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
     }
 
     /**
-     * Register the player on the groups line's player list via setPlayerSet — the same call
+     * Register the player on the groups line's player list via setPlayerSet ??the same call
      * the groups addon performs when a member joins; it triggers the
      * SourceLinePlayersListPacket / SourceLinePlayerAddPacket updates that PV clients use
      * to render the group member list in the overlay.
