@@ -1,4 +1,4 @@
-package io.pfaumc.voicebridge.group
+﻿package io.pfaumc.voicebridge.group
 
 import de.maxhenkel.voicechat.api.Group as SvcGroup
 import de.maxhenkel.voicechat.api.VoicechatConnection
@@ -57,6 +57,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
     private class GroupSources(
         val entity: net.minecraft.server.level.ServerPlayer,
         val level: net.minecraft.server.level.ServerLevel,
+        val pvGroupId: UUID,
         val playerSource: ServerPlayerSource?,
         val broadcastSource: ServerBroadcastSource
     )
@@ -67,6 +68,8 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
     /** SVC players currently mirrored onto a PV group roster (uuid -> bridged group name). */
     private val svcRoster = ConcurrentHashMap<UUID, String>()
+
+    private val groupSequenceNumbers = ConcurrentHashMap<UUID, Long>()
 
     private fun pvAddon(): GroupsAddon? {
         if (!detected) return null
@@ -125,9 +128,10 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
         val speakerLevel = runCatching { speakerPlayer.serverLevel() }.getOrNull() ?: return
         var entry = svcGroupSources[speakerUuid]
-            ?.takeIf { it.entity === speakerPlayer && it.level === speakerLevel }
+            ?.takeIf { it.entity === speakerPlayer && it.level === speakerLevel && it.pvGroupId == pvGroup.id }
         if (entry == null) {
-            entry = createGroupSources(line, pvAdapter, speakerUuid, speakerPlayer, speakerLevel)
+            removeGroupSources(speakerUuid)
+            entry = createGroupSources(line, pvAdapter, pvGroup, speakerUuid, speakerPlayer, speakerLevel)
             svcGroupSources[speakerUuid] = entry
         }
 
@@ -170,12 +174,19 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
     private fun createGroupSources(
         line: BaseServerSourceLine,
         pvAdapter: PvAdapter,
+        pvGroup: PvGroup,
         speakerUuid: UUID,
         speakerPlayer: net.minecraft.server.level.ServerPlayer,
         speakerLevel: net.minecraft.server.level.ServerLevel
     ): GroupSources {
         val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
         val thresholdSq = mod.bridgeConfig.defaultDistance * mod.bridgeConfig.defaultDistance
+
+        // Listener gates shared by both sources: group membership (privacy - the sources
+        // themselves must never leak group audio to non-members) and dual-mod exclusion
+        // (dual-mod listeners already receive group audio natively through their own mod).
+        fun isEligibleListener(vp: VoicePlayer): Boolean =
+            pvGroup.playersIds.contains(vp.instance.uuid) && !mod.sessionManager.isDualMod(vp.instance.uuid)
 
         // createPlayerSource exists on the runtime line class but not on the 2.1.8 API
         // interface this jar compiles against -> reflection, graceful null on older PV.
@@ -185,7 +196,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         }.getOrNull()?.apply {
             isIconVisible = true
             addFilter<VoicePlayer> { vp ->
-                isSameDimension(vp, speakerLevel) && isWithinSpeakerRange(vp, speakerVoice, thresholdSq)
+                isEligibleListener(vp) && isSameDimension(vp, speakerLevel) && isWithinSpeakerRange(vp, speakerVoice, thresholdSq)
             }
         }
 
@@ -201,17 +212,18 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
                 // With a player source active, it owns near delivery (positional, with
                 // icons); the broadcast source reaches everyone else: members far away and
                 // in other dimensions. Without a player source (older PV), the broadcast
-                // reaches everyone but the speaker.
+                // reaches every eligible listener but the speaker.
                 if (playerSource != null) {
-                    !isSameDimension(vp, speakerLevel) || !isWithinSpeakerRange(vp, speakerVoice, thresholdSq)
+                    isEligibleListener(vp) &&
+                        (!isSameDimension(vp, speakerLevel) || !isWithinSpeakerRange(vp, speakerVoice, thresholdSq))
                 } else {
-                    vp.instance.uuid != speakerUuid
+                    isEligibleListener(vp) && vp.instance.uuid != speakerUuid
                 }
             }
         }
 
         logger.debug("Group SVC->PV: created group sources for $speakerUuid (playerSource=${playerSource != null})")
-        return GroupSources(speakerPlayer, speakerLevel, playerSource, broadcast)
+        return GroupSources(speakerPlayer, speakerLevel, pvGroup.id, playerSource, broadcast)
     }
 
     private fun isSameDimension(vp: VoicePlayer, level: net.minecraft.server.level.ServerLevel): Boolean =
@@ -263,6 +275,9 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         for (connection in members) {
             val listenerUuid = connection.player.uuid
             if (listenerUuid == speakerUuid) continue
+            // Dual-mod listeners receive PV group audio natively through their own client -
+            // the static channel would double it.
+            if (mod.sessionManager.isDualMod(listenerUuid)) continue
             val channel = speakerChannels.computeIfAbsent(listenerUuid) {
                 api.createStaticAudioChannel(UUID.randomUUID(), apiLevel, connection)
                     ?: throw IllegalStateException("failed to create static audio channel")
@@ -398,6 +413,13 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
     }
 
     fun shutdown() {
+        // Remove the sources from the groups line, otherwise PV keeps orphaned sources
+        // after a shutdown/reload (same cleanup as removeGroupSources).
+        val line = pvAddon()?.let { groupsSourceLine(it) }
+        svcGroupSources.values.forEach { entry ->
+            entry.playerSource?.let { runCatching { line?.removeSource(it.id) } }
+            runCatching { line?.removeSource(entry.broadcastSource.id) }
+        }
         svcGroupSources.clear()
         staticChannels.values.forEach { listeners -> listeners.values.forEach { runCatching { it.flush() } } }
         staticChannels.clear()
@@ -421,6 +443,6 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
     companion object {
         const val ADDON_ID = "pv-addon-groups"
-        private val groupSequenceNumbers = ConcurrentHashMap<UUID, Long>()
     }
 }
+

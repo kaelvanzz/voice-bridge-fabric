@@ -10,6 +10,7 @@ import io.pfaumc.voicebridge.session.ModType
 import io.pfaumc.voicebridge.session.SessionManager
 import io.pfaumc.voicebridge.spatial.SpatialMapper
 import kotlinx.coroutines.CoroutineName
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
@@ -101,12 +102,16 @@ class VoiceBridgeMod : ModInitializer {
 
         initialized = true
 
-        logger.info("Voice Bridge enabled ??bridging Simple Voice Chat <-> Plasmo Voice")
+        logger.info("Voice Bridge enabled -> bridging Simple Voice Chat <-> Plasmo Voice")
         BridgeMetrics.log(logger)
     }
 
+    private var cleanupJob: Job? = null
+
     private fun startCleanupLoop() {
-        scope.launch {
+        // A fresh child Job per server run: cancelling it on stop keeps the parent scope
+        // usable, so the loop can be re-armed on the next server start in the same JVM.
+        cleanupJob = scope.launch {
             while (isActive) {
                 delay(5.seconds)
                 val server = server
@@ -122,6 +127,8 @@ class VoiceBridgeMod : ModInitializer {
     }
 
     private fun disable() {
+        cleanupJob?.cancel()
+        cleanupJob = null
         pvAdapter?.shutdown()
         SvcAdapter.instance?.shutdown()
         sessionManager.clear()
@@ -132,7 +139,7 @@ class VoiceBridgeMod : ModInitializer {
     private fun initSvcAdapter(): Boolean {
         return try {
             Class.forName("de.maxhenkel.voicechat.api.VoicechatPlugin")
-            logger.info("Simple Voice Chat detected ??SVC adapter will be initialized by SVC")
+            logger.info("Simple Voice Chat detected -> SVC adapter will be initialized by SVC")
             true
         } catch (e: ClassNotFoundException) {
             logger.info("Simple Voice Chat not found on classpath")
@@ -144,7 +151,7 @@ class VoiceBridgeMod : ModInitializer {
         return try {
             Class.forName("su.plo.voice.api.server.PlasmoVoiceServer")
             pvAdapter = PvAdapter(this)
-            logger.info("Plasmo Voice detected ??PV adapter initialized")
+            logger.info("Plasmo Voice detected -> PV adapter initialized")
             true
         } catch (e: ClassNotFoundException) {
             logger.info("Plasmo Voice not found on classpath")
@@ -177,3 +184,7 @@ class VoiceBridgeMod : ModInitializer {
         fun isReady(): Boolean = instance != null && initialized
     }
 }
+
+
+
+

@@ -20,20 +20,16 @@ class SpatialMapper(var config: BridgeConfig) {
     }
 
     /**
-     * Get the effective distance, applying per-world overrides if configured.
+     * Effective voice distance for a world:
+     * - if the world has a configured override, that value replaces the default range
+     * - otherwise the speaker's own distance is kept (falling back to the default when
+     *   the source provides none)
+     * - everything is clamped to [maxDistance]
      */
     fun getEffectiveDistance(distance: Double, worldName: String? = null): Double {
-        val maxDistance = config.maxDistance
-        val worldOverride = worldName?.let { config.worldOverrides[it] }
-        val effectiveDefault = worldOverride ?: config.defaultDistance
-
-        // If the incoming distance is valid, use it (clamped to max).
-        // Otherwise fall back to configured default.
-        return if (distance > 0) {
-            distance.coerceAtMost(maxDistance)
-        } else {
-            effectiveDefault.coerceAtMost(maxDistance)
-        }
+        val override = worldName?.let { config.worldOverrides[it] }
+        val base = override ?: distance.takeIf { it > 0 } ?: config.defaultDistance
+        return base.coerceAtMost(config.maxDistance)
     }
 
     /**

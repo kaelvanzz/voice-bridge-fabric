@@ -1,5 +1,6 @@
 package io.pfaumc.voicebridge.adapter
 
+import de.maxhenkel.voicechat.api.Group
 import de.maxhenkel.voicechat.api.VoicechatApi
 import de.maxhenkel.voicechat.api.VoicechatPlugin
 import de.maxhenkel.voicechat.api.VoicechatServerApi
@@ -172,6 +173,16 @@ class SvcAdapter : VoicechatPlugin {
         val api = serverApi ?: return
         val distance = api.voiceChatDistance.toFloat()
 
+        // SVC group audio: relay to the matching PV group channel if one is bridged.
+        val svcGroup = senderConnection.group
+        // ISOLATED groups cut proximity to non-members on the SVC side - the bridge must
+        // not leak their audio to nearby PV players either. Group relay still runs so the
+        // bridged PV members hear the speaker.
+        if (svcGroup?.type == Group.Type.ISOLATED) {
+            mod.groupBridge.relaySvcGroupToPv(senderUuid, senderPlayer, svcGroup, opusData)
+            return
+        }
+
         // Relay to PV players (proximity)
         mod.audioRelay.relaySvcToPv(
             senderUuid = senderUuid,
@@ -182,9 +193,9 @@ class SvcAdapter : VoicechatPlugin {
             whispering = whispering
         )
 
-        // SVC group audio: relay to the matching PV group channel if one is bridged
-        val svcGroup = senderConnection.group ?: return
-        mod.groupBridge.relaySvcGroupToPv(senderUuid, senderPlayer, svcGroup, opusData)
+        if (svcGroup != null) {
+            mod.groupBridge.relaySvcGroupToPv(senderUuid, senderPlayer, svcGroup, opusData)
+        }
     }
 
     // --- Outbound: Send audio FROM a PV player TO SVC clients ---

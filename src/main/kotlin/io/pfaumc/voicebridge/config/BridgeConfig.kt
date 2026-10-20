@@ -107,11 +107,12 @@ data class BridgeConfig(
               # jitter but more latency. 2 = ~40ms added.
               jitter-frames: 2
 
-            # Per-world distance overrides (optional)
+            # Per-world distance overrides (optional). Keys are dimension identifiers
+            # (namespace:path). An override replaces the voice range in that world.
             # worlds:
-            #   world_nether:
+            #   minecraft:the_nether:
             #     default-distance: 24.0
-            #   world_the_end:
+            #   minecraft:the_end:
             #     default-distance: 64.0
         """.trimIndent()
     }
