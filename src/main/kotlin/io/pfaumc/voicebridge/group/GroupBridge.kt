@@ -71,6 +71,18 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
     private val groupSequenceNumbers = ConcurrentHashMap<UUID, Long>()
 
+    /** Throttled per-speaker diagnostics: "direction-uuid" -> lastLogMillis. */
+    private val lastGroupLog = ConcurrentHashMap<String, Long>()
+
+    private fun shouldLogGroupFrame(speakerUuid: UUID, direction: String): Boolean {
+        val now = System.currentTimeMillis()
+        val last = lastGroupLog["$direction-$speakerUuid"] ?: 0L
+        return if (now - last >= 5000L) {
+            lastGroupLog["$direction-$speakerUuid"] = now
+            true
+        } else false
+    }
+
     private fun pvAddon(): GroupsAddon? {
         if (!detected) return null
         if (!mod.bridgeConfig.groupsEnabled) return null
@@ -136,12 +148,18 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         }
 
         val seq = groupSequenceNumbers.merge(speakerUuid, 1L) { current, _ -> current + 1 } ?: 1L
+        val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
+        val thresholdSq = mod.bridgeConfig.defaultDistance * mod.bridgeConfig.defaultDistance
 
         // Near members: player source (PlayerSourceInfo -> client-side speaker attribution:
         // name-tag mic icon + overlay entry). Positional, but they are within voice range.
         entry.playerSource?.let { ps ->
             try {
                 ps.sendAudioFrame(encrypted, seq, Short.MAX_VALUE)
+                if (shouldLogGroupFrame(speakerUuid, "svc-pv")) {
+                    val near = members.count { isSameDimension(it, speakerLevel) && isWithinSpeakerRange(it, speakerVoice, thresholdSq) }
+                    logger.info("Group SVC->PV: relaying $speakerUuid (playerSource=true, near=$near, far=${members.size - near}, dim=${speakerLevel.dimension().location()})")
+                }
                 BridgeMetrics.svcToPlasmoFrames.incrementAndGet()
             } catch (t: Throwable) {
                 logger.debug("Group SVC->PV: player-source send failed for $speakerUuid: ${t.message}")
@@ -150,15 +168,17 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         }
 
         // Far / cross-dimension members: broadcast source (non-positional, full volume, no
-        // name-tag icon ??same as the groups addon's own cross-dimension delivery). The
+        // name-tag icon - same as the groups addon's own cross-dimension delivery). The
         // source filter decides the split per delivery, so members walking away switch over
         // automatically.
         entry.broadcastSource.players = members
         val sourcePacket = SourceAudioPacket(seq, entry.broadcastSource.state.toByte(), encrypted, entry.broadcastSource.id, 0)
-        val speakerVoice = pvAdapter.voiceServer.playerManager.getPlayerByInstance(speakerPlayer)
         val speakerPacket = PlayerAudioPacket(seq, encrypted, pvGroup.id, 0, false)
         try {
             entry.broadcastSource.sendAudioPacket(sourcePacket, PlayerActivationInfo(speakerVoice, speakerPacket))
+            if (shouldLogGroupFrame(speakerUuid, "svc-pv-bc")) {
+                logger.info("Group SVC->PV: broadcast frame sent (listeners=${entry.broadcastSource.players?.size})")
+            }
             BridgeMetrics.svcToPlasmoFrames.incrementAndGet()
         } catch (t: Throwable) {
             logger.debug("Group SVC->PV: broadcast send failed for $speakerUuid: ${t.message}")
@@ -271,6 +291,10 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         val speakerLevel = runCatching { speakerPlayer.serverLevel() }.getOrNull() ?: return true
         val apiLevel = api.fromServerLevel(speakerLevel)
         val speakerChannels = staticChannels.computeIfAbsent(speakerUuid) { ConcurrentHashMap() }
+
+        if (shouldLogGroupFrame(speakerUuid, "pv-svc")) {
+            logger.info("Group PV->SVC: relaying $speakerUuid to ${members.size} SVC members (group=${svcGroup.name})")
+        }
 
         for (connection in members) {
             val listenerUuid = connection.player.uuid

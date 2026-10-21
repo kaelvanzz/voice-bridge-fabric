@@ -1,3 +1,5 @@
+To honour the JVM settings for this build a single-use Daemon process will be forked. For more on this, please refer to https://docs.gradle.org/9.5.0/userguide/gradle_daemon.html#sec:disabling_the_daemon in the Gradle documentation.
+Daemon will be stopped at the end of the build 
 
 > Configure project :
 Fabric Loom: 1.17.21
@@ -10,9 +12,9 @@ Fabric Loom: 1.17.21
 > Task :validateAccessWidener NO-SOURCE
 
 > Task :compileKotlin
-w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:246:97 Elvis operator (?:) always returns the left operand of non-nullable type 'VoiceServerPlayer'.
-w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:282:20 'fun createStaticAudioChannel(p0: UUID!, p1: ServerLevel!, p2: VoicechatConnection!): StaticAudioChannel?' is deprecated. Deprecated in Java.
-w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:372:51 Unnecessary safe call on a non-null receiver of type 'BaseServerSourceLine'.
+w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:266:97 Elvis operator (?:) always returns the left operand of non-nullable type 'VoiceServerPlayer'.
+w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:306:20 'fun createStaticAudioChannel(p0: UUID!, p1: ServerLevel!, p2: VoicechatConnection!): StaticAudioChannel?' is deprecated. Deprecated in Java.
+w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:396:51 Unnecessary safe call on a non-null receiver of type 'BaseServerSourceLine'.
 
 > Task :compileJava NO-SOURCE
 > Task :classes UP-TO-DATE
@@ -27,6 +29,6 @@ w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voiceb
 > Task :assemble
 > Task :build
 
-BUILD SUCCESSFUL in 15s
+BUILD SUCCESSFUL in 18s
 6 actionable tasks: 4 executed, 2 up-to-date
 Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.5.0/userguide/configuration_cache_enabling.html
