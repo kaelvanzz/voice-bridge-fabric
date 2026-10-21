@@ -116,6 +116,7 @@ class VoiceBridgeMod : ModInitializer {
                 delay(5.seconds)
                 val server = server
                 sessionManager.cleanup(if (server != null) { uuid -> server.playerList.getPlayer(uuid) != null } else null)
+                runCatching { groupBridge.reconcileGroups() }
             }
         }
     }

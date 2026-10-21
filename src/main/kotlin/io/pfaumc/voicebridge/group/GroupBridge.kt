@@ -316,6 +316,7 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
             if (mod.sessionManager.isDualMod(listenerUuid)) continue
             val channel = speakerChannels.computeIfAbsent(listenerUuid) {
                 api.createStaticAudioChannel(UUID.randomUUID(), apiLevel, connection)
+                    ?.apply { setBypassGroupIsolation(true) }
                     ?: throw IllegalStateException("failed to create static audio channel")
             }
             try {
@@ -349,11 +350,14 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         val playerUuid = connection.player.uuid
 
         if (pvGroup == null) {
-            // No PV group with this name yet ??guide the SVC player on how PV players join.
-            sendChat(
-                connection.player.player,
-                "PV players can join this group by creating a group with the same name: /groups create name: ${svcGroup.name}"
-            )
+            // No PV group with this name yet - the reconciler creates the mirror if this
+            // group is bridgeable; otherwise guide the SVC player.
+            if (!svcGroup.hasPassword()) {
+                createPvMirror(addon, svcGroup.name, svcGroup.isPersistent)
+            }
+            connection.player.player?.let { target ->
+                sendChat(target, "A matching PV group '${svcGroup.name}' has been created - PV players can join via /groups")
+            }
             return
         }
         if (pvGroup.playersIds.contains(playerUuid)) return
@@ -367,13 +371,68 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
     fun onSvcCreateGroup(svcGroup: SvcGroup?, connection: VoicechatConnection?) {
         if (svcGroup == null) return
+        if (svcGroup.hasPassword()) return // cannot mirror the password to the PV side
         val addon = pvAddon() ?: return
         if (addon.groupManager.groups.values.any { it.name.equals(svcGroup.name, ignoreCase = true) }) return
-        val target = connection?.player?.player ?: return
-        sendChat(
-            target,
-            "PV players can join this group by creating a group with the same name: /groups create name: ${svcGroup.name}"
-        )
+
+        createPvMirror(addon, svcGroup.name, svcGroup.isPersistent)
+        connection?.player?.player?.let { target ->
+            sendChat(target, "A matching PV group '${svcGroup.name}' has been created - PV players can join via /groups")
+        }
+    }
+
+    private fun createPvMirror(addon: GroupsAddon, name: String, persistent: Boolean): PvGroup? {
+        val line = groupsSourceLine(addon) ?: return null
+        val playerSet = line.playerSetManager?.createBroadcastSet() ?: return null
+        return runCatching {
+            val group = PvGroup(
+                playerSet,
+                UUID.randomUUID(),
+                name,
+                null,                                  // password
+                persistent,
+                java.util.HashSet<UUID>(),             // playersIds
+                java.util.concurrent.CopyOnWriteArrayList<su.plo.slib.api.entity.player.McGameProfile>(), // bannedPlayers
+                null                                   // owner
+            )
+            addon.groupManager.groups[group.id] = group
+            logger.info("Group bridge: created PV mirror group '${group.name}'")
+            group
+        }.getOrNull()
+    }
+
+    /**
+     * Mirror reconciliation, called periodically: any group on one side without a
+     * same-name group on the other gets a mirror created there, so a group created on
+     * either mod becomes visible/joinable on both.
+     *
+     * Skipped: password-protected SVC groups (the password cannot be read to mirror),
+     * permission-restricted PV groups (SVC cannot enforce PV permissions), and groups
+     * with no online members on their own side (avoids re-creating empty mirrors).
+     */
+    fun reconcileGroups() {
+        val addon = pvAddon() ?: return
+        val api = svcApi() ?: return
+        val svcGroups = api.groups ?: return
+        val pvGroups = addon.groupManager.groups.values
+
+        // PV group without a same-name SVC group -> create the SVC mirror
+        for (pv in pvGroups) {
+            if (pv.password != null) continue            // cannot mirror the password
+            if (pv.permissionsFilter.isNotEmpty()) continue // SVC cannot enforce PV permissions
+            if (pv.onlinePlayers.isEmpty()) continue     // avoid re-creating empty mirrors
+            if (svcGroups.any { it.name.equals(pv.name, ignoreCase = true) }) continue
+            runCatching { api.createGroup(pv.name, pv.password, true) }
+            logger.info("Group bridge: created SVC mirror group '${pv.name}'")
+        }
+
+        // SVC group without a same-name PV group -> create the PV mirror
+        for (svc in svcGroups) {
+            if (svc.hasPassword()) continue              // cannot read the SVC password
+            if (svcMembersOf(svc, api).isEmpty()) continue // avoid re-creating empty mirrors
+            if (pvGroups.any { it.name.equals(svc.name, ignoreCase = true) }) continue
+            createPvMirror(addon, svc.name, svc.isPersistent)
+        }
     }
 
     /**
@@ -481,4 +540,5 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
         const val ADDON_ID = "pv-addon-groups"
     }
 }
+
 

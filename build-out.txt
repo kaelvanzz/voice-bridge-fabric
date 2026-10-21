@@ -15,7 +15,8 @@ Fabric Loom: 1.17.21
 w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/adapter/PvAdapter.kt:228:50 Unnecessary safe call on a non-null receiver of type 'ServerActivation'.
 w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:278:97 Elvis operator (?:) always returns the left operand of non-nullable type 'VoiceServerPlayer'.
 w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:318:20 'fun createStaticAudioChannel(p0: UUID!, p1: ServerLevel!, p2: VoicechatConnection!): StaticAudioChannel?' is deprecated. Deprecated in Java.
-w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:408:51 Unnecessary safe call on a non-null receiver of type 'BaseServerSourceLine'.
+w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:425:30 'fun createGroup(p0: String!, p1: String?, p2: Boolean): Group!' is deprecated. Deprecated in Java.
+w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voicebridge/group/GroupBridge.kt:467:51 Unnecessary safe call on a non-null receiver of type 'BaseServerSourceLine'.
 
 > Task :compileJava NO-SOURCE
 > Task :classes UP-TO-DATE
@@ -30,6 +31,6 @@ w: file:///C:/Users/user/Downloads/voice-bridge/src/main/kotlin/io/pfaumc/voiceb
 > Task :assemble
 > Task :build
 
-BUILD SUCCESSFUL in 26s
+BUILD SUCCESSFUL in 36s
 6 actionable tasks: 4 executed, 2 up-to-date
 Consider enabling configuration cache to speed up this build: https://docs.gradle.org/9.5.0/userguide/configuration_cache_enabling.html

@@ -232,6 +232,26 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         }
 
         val playerUuid = player.instance.uuid
+
+        // Group semantics take over when the speaker is in a bridged PV group: their audio
+        // reaches the SVC group members via static channels (full volume, distance-
+        // independent, cross-dimension) and NOT via the positional entity relay - this
+        // mirrors the groups addon's own setPlayerSet behavior (nearby non-members do not
+        // hear group speech). Resolved live per packet.
+        val pvGroupName = plugin.groupBridge.pvGroupNameOf(playerUuid)
+        if (pvGroupName != null && plugin.groupBridge.hasBridgedSvcGroup(pvGroupName)) {
+            val decrypted = try {
+                voiceServer.defaultEncryption.decrypt(packet.data)
+            } catch (e: EncryptionException) {
+                logger.debug("Failed to decrypt group PV audio from ${player.instance.name}: ${e.message}")
+                BridgeMetrics.droppedFrames.incrementAndGet()
+                return
+            }
+            val speakerPlayer = plugin.server?.playerList?.getPlayer(playerUuid) ?: return
+            plugin.groupBridge.relayPvGroupToSvc(playerUuid, speakerPlayer, pvGroupName, decrypted)
+            return
+        }
+
         val distance = packet.distance
         val sequenceNumber = packet.sequenceNumber
 
@@ -467,5 +487,6 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         private const val MAX_EXTRA_FRAMES = 10
     }
 }
+
 
 
