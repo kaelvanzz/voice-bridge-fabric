@@ -1,4 +1,4 @@
-package io.pfaumc.voicebridge.adapter
+﻿package io.pfaumc.voicebridge.adapter
 
 import io.pfaumc.voicebridge.BridgeMetrics
 import io.pfaumc.voicebridge.VoiceBridgeMod
@@ -67,7 +67,9 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
     private class OutboundSource(
         val source: ServerEntitySource,
         val entity: ServerPlayer,
-        val level: ServerLevel
+        val level: ServerLevel,
+        /** The speaker's bridged PV group at source creation; rebuild when it changes. */
+        val pvGroupId: UUID?
     )
 
     private val outboundSources = ConcurrentHashMap<UUID, OutboundSource>()
@@ -81,7 +83,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
     // secret by player id could target the wrong connection.
     private val bridgedConnections = ConcurrentHashMap<UUID, UUID>()
 
-    // One-shot diagnostics for the PV?�SVC chain (logged once, then suppressed)
+    // One-shot diagnostics for the PV?嚙磅VC chain (logged once, then suppressed)
     @Volatile private var loggedActivationMismatch = false
     @Volatile private var loggedCastFailure = false
     @Volatile private var loggedFirstFrame = false
@@ -114,7 +116,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
             .getActivationByName("proximity")
             .orElse(null)
         if (proximityActivation == null) {
-            logger.warn("Proximity activation not found ??PV?�SVC bridge may not work")
+            logger.warn("Proximity activation not found ??PV?嚙磅VC bridge may not work")
         }
 
         val cfg = plugin.bridgeConfig
@@ -143,12 +145,12 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         val player = event.connection.player
         val playerUuid = player.instance.uuid
 
-        // Our own fake bridged connection fires this event too — ignore it entirely.
+        // Our own fake bridged connection fires this event too ??ignore it entirely.
         // (Registering the fake connection must NOT tear it down or mark the player as PV!)
         if (event.connection is BridgedUdpConnection) return
 
         // A REAL PV connection arrived for a player we created a fake bridged connection for
-        // (dual-mod player whose SVC voice connected first) — tear the fake down and continue
+        // (dual-mod player whose SVC voice connected first) ??tear the fake down and continue
         // with normal registration.
         if (bridgedConnections.containsKey(playerUuid)) {
             removeFakeConnection(playerUuid)
@@ -223,7 +225,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
                 loggedActivationMismatch = true
                 logger.warn(
                     "PV activation event received but does not match our 'proximity' activation " +
-                        "(event=${event.activation?.javaClass?.simpleName}) ??PV?�SVC relay will not work"
+                        "(event=${event.activation?.javaClass?.simpleName}) ??PV?嚙磅VC relay will not work"
                 )
             }
             return
@@ -252,14 +254,14 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         val senderPlayer = plugin.server?.playerList?.getPlayer(playerUuid) ?: run {
             if (!loggedCastFailure) {
                 loggedCastFailure = true
-                logger.warn("Could not find ServerPlayer for PV player ${player.instance.name} ??PV?�SVC relay will not work")
+                logger.warn("Could not find ServerPlayer for PV player ${player.instance.name} ??PV?嚙磅VC relay will not work")
             }
             return
         }
 
         if (!loggedFirstFrame) {
             loggedFirstFrame = true
-            logger.info("PV?�SVC: received first audio frame from ${player.instance.name} (dist=$distance)")
+            logger.info("PV?嚙磅VC: received first audio frame from ${player.instance.name} (dist=$distance)")
         }
 
         // Relay to SVC players via AudioRelay
@@ -300,16 +302,17 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         senderPlayer: ServerPlayer,
         opusData: ByteArray,
         sequenceNumber: Long,
-        distance: Short
+        distance: Short,
+        speakerPvGroupId: UUID? = null
     ): Boolean {
         val line = sourceLine ?: return false
         val currentLevel = senderPlayer.serverLevel()
 
         var entry = outboundSources[senderUuid]
-        if (entry != null && (entry.entity !== senderPlayer || entry.level !== currentLevel)) {
+        if (entry != null && (entry.entity !== senderPlayer || entry.level !== currentLevel || entry.pvGroupId != speakerPvGroupId)) {
             runCatching { entry.source.remove() }
             outboundSources.remove(senderUuid, entry)
-            logger.debug("SVC?�PV: stale entity source for $senderUuid (entity/level changed), recreating")
+            logger.debug("SVC?嚙瞑V: stale entity source for $senderUuid (entity/level changed), recreating")
             entry = null
         }
 
@@ -320,7 +323,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
                 // Exclude dual-mod players ??they already hear SVC audio natively
                 addFilter<VoicePlayer> { player -> !plugin.sessionManager.isDualMod(player.instance.uuid) }
             }
-            entry = OutboundSource(created, senderPlayer, currentLevel)
+            entry = OutboundSource(created, senderPlayer, currentLevel, speakerPvGroupId)
             outboundSources[senderUuid] = entry
         }
 
@@ -361,7 +364,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         try {
             source.sendAudioFrame(encryptedData, seq, distance)
         } catch (t: Throwable) {
-            logger.debug("SVC?�PV: send failed for $senderUuid: ${t.message}")
+            logger.debug("SVC?嚙瞑V: send failed for $senderUuid: ${t.message}")
             BridgeMetrics.droppedFrames.incrementAndGet()
         }
     }
@@ -406,7 +409,7 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
 
         // SVC players never do the PV client handshake, so PV marks them voice-disabled and
         // PV clients hide their mic icons. Flip the flag (the setter lives on the impl class,
-        // not the API interface → reflection) and re-broadcast the player info below so PV
+        // not the API interface ??reflection) and re-broadcast the player info below so PV
         // clients render them as voice-enabled.
         runCatching {
             voicePlayer.javaClass.methods
@@ -464,3 +467,5 @@ class PvAdapter(private val plugin: VoiceBridgeMod) : AddonInitializer {
         private const val MAX_EXTRA_FRAMES = 10
     }
 }
+
+

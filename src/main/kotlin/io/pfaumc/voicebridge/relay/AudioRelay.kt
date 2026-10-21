@@ -48,11 +48,13 @@ class AudioRelay(
         opusData: ByteArray,
         sequenceNumber: Long,
         distance: Float,
-        whispering: Boolean
+        whispering: Boolean,
+        speakerPvGroupId: UUID? = null
     ) {
         val pv = pvAdapter ?: return
 
-        // Skip relay for dual-mod players - PV clients already hear them via PV natively
+        // Skip relay for dual-mod speakers - their client transmits through both mods, and
+        // PV clients already hear them via PV natively
         if (sessionManager.isDualMod(senderUuid)) return
 
         val effectiveDistance = if (whispering) {
@@ -63,13 +65,16 @@ class AudioRelay(
         val worldName = senderPlayer.serverLevel().dimension().location().toString()
         val pvDistance = spatialMapper.svcToPvDistance(effectiveDistance.toFloat(), worldName)
 
-        // Let the PV adapter handle sending to nearby PV players
+        // Let the PV adapter handle sending to nearby PV players. Group members of the
+        // speaker's bridged PV group are filtered out - they receive the speaker through
+        // the group relay instead (no double audio).
         val sent = pv.sendAudioFromExternalPlayer(
             senderUuid,
             senderPlayer,
             opusData,
             sequenceNumber,
-            pvDistance
+            pvDistance,
+            speakerPvGroupId
         )
 
         if (sent) {

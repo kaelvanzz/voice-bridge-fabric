@@ -55,7 +55,9 @@ class SvcAdapter : VoicechatPlugin {
     private class OutboundChannel(
         val channel: EntityAudioChannel,
         val entity: ServerPlayer,
-        val level: ServerLevel
+        val level: ServerLevel,
+        /** The speaker's bridged PV group at channel creation; the filter excludes its members. */
+        val pvGroupId: UUID?
     )
 
     private val outboundChannels = ConcurrentHashMap<UUID, OutboundChannel>()
@@ -175,6 +177,9 @@ class SvcAdapter : VoicechatPlugin {
 
         // SVC group audio: relay to the matching PV group channel if one is bridged.
         val svcGroup = senderConnection.group
+        // Group members are excluded from the proximity entity relay below (they receive
+        // the group relay instead), so resolve the speaker's bridged PV group here.
+        val speakerPvGroupId = if (svcGroup != null) mod.groupBridge.getSpeakerPvGroupId(senderUuid) else null
         // ISOLATED groups cut proximity to non-members on the SVC side - the bridge must
         // not leak their audio to nearby PV players either. Group relay still runs so the
         // bridged PV members hear the speaker.
@@ -183,14 +188,16 @@ class SvcAdapter : VoicechatPlugin {
             return
         }
 
-        // Relay to PV players (proximity)
+        // Relay to PV players (proximity). Group members are filtered out of the entity
+        // source - they receive the speaker through the group relay instead.
         mod.audioRelay.relaySvcToPv(
             senderUuid = senderUuid,
             senderPlayer = senderPlayer,
             opusData = opusData,
             sequenceNumber = 0, // SVC MicrophonePacket doesn't expose sequence to API
             distance = distance,
-            whispering = whispering
+            whispering = whispering,
+            speakerPvGroupId = speakerPvGroupId
         )
 
         if (svcGroup != null) {
@@ -213,17 +220,18 @@ class SvcAdapter : VoicechatPlugin {
         senderPlayer: ServerPlayer,
         opusData: ByteArray,
         sequenceNumber: Long,
-        distance: Float
+        distance: Float,
+        speakerPvGroupId: UUID? = null
     ): Boolean {
         val mod = plugin ?: return false
         val api = serverApi ?: return false
         val currentLevel = senderPlayer.serverLevel()
 
         var entry = outboundChannels[senderUuid]
-        if (entry != null && (entry.entity !== senderPlayer || entry.level !== currentLevel || entry.channel.isClosed)) {
+        if (entry != null && (entry.entity !== senderPlayer || entry.level !== currentLevel || entry.channel.isClosed || entry.pvGroupId != speakerPvGroupId)) {
             runCatching { entry.channel.flush() }
             outboundChannels.remove(senderUuid, entry)
-            logger.debug("PV→SVC: stale EntityAudioChannel for $senderUuid (entity/level changed), recreating")
+            logger.debug("PV→SVC: stale EntityAudioChannel for $senderUuid (entity/level/group changed), recreating")
             entry = null
         }
 
@@ -241,11 +249,14 @@ class SvcAdapter : VoicechatPlugin {
             }
             newChannel.distance = distance
             // Set filter once at creation — only send to SVC players who are NOT dual-mod
+            // and NOT members of the speaker's bridged PV group (those receive the speaker
+            // through the group relay instead; otherwise they would hear double audio).
             newChannel.setFilter { serverPlayer ->
                 val session = mod.sessionManager.getSession(serverPlayer.uuid)
-                session != null && session.hasModType(ModType.SIMPLE_VOICE_CHAT) && !session.isDualMod()
+                session != null && session.hasModType(ModType.SIMPLE_VOICE_CHAT) && !session.isDualMod() &&
+                    (speakerPvGroupId == null || !mod.groupBridge.isListenerInPvGroup(serverPlayer.uuid, speakerPvGroupId))
             }
-            entry = OutboundChannel(newChannel, senderPlayer, currentLevel)
+            entry = OutboundChannel(newChannel, senderPlayer, currentLevel, speakerPvGroupId)
             outboundChannels[senderUuid] = entry
             logger.info("PV→SVC: created EntityAudioChannel for $senderUuid")
         }

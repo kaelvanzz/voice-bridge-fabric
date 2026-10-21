@@ -97,6 +97,18 @@ class GroupBridge(private val mod: VoiceBridgeMod) {
 
     fun isAvailable(): Boolean = pvAddon() != null
 
+    /** The PV group the player is currently in, or null. Resolved live from the groups addon. */
+    fun getSpeakerPvGroupId(playerUuid: UUID): UUID? =
+        pvAddon()?.groupManager?.groupByPlayer?.get(playerUuid)?.id
+
+    /** Whether the listener is on the roster of the PV group with this id. */
+    fun isListenerInPvGroup(listenerUuid: UUID, pvGroupId: UUID): Boolean =
+        pvAddon()?.groupManager?.groupByPlayer?.get(listenerUuid)?.id == pvGroupId
+
+    /** Whether an SVC group with this name exists (i.e. the PV group is bridged). */
+    fun hasBridgedSvcGroup(name: String): Boolean =
+        svcApi()?.groups?.any { it.name.equals(name, ignoreCase = true) } ?: false
+
     private fun groupsSourceLine(addon: GroupsAddon): BaseServerSourceLine? =
         runCatching { addon.groupManager.sourceLine }.getOrNull()
 
