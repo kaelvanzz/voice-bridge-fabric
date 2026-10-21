@@ -56,6 +56,7 @@ A `config.yml` is generated on first run in `config/voice-bridge/`:
 bridge:
   enabled: true       # Enable/disable the bridge
   debug: false        # Enable debug logging
+  groups-enabled: true # Bridge SVC groups <-> PV group channels (requires pv-addon-groups)
 
 proximity:
   default-distance: 48.0      # Default voice range in blocks
@@ -96,6 +97,35 @@ Alias: `/vb`
 Permission: vanilla game-master commands permission (`Permissions.COMMANDS_GAMEMASTER`; server ops granted via
 `/op` have all command permissions by default)
 
+## Group bridging
+
+Voice Bridge can bridge **groups** (SVC group chats and Plasmo Voice group channels) so that players
+in same-named groups on both mods can talk to each other:
+
+- **Setup**: install the official
+  [pv-addon-groups](https://modrinth.com/plugin/pv-addon-groups) server addon alongside Plasmo Voice.
+  Group bridging auto-enables when the addon is present (or set `bridge.groups-enabled: true` explicitly).
+- **Pairing**: a group is bridged when an SVC group and a PV group (created with `/groups`) share the
+  same name. A group created on either mod is automatically mirrored to the other, so players usually
+  only need to create one group and everyone joins it from their own mod.
+- **Audio model**:
+  - An SVC group member speaking is heard by nearby PV members positionally (with name-tag and overlay
+    icons) and by distant or cross-dimension PV members at full volume, regardless of distance.
+  - A PV group member speaking is heard by all SVC group members at full volume — non-positional, and
+    it works across dimensions.
+- **Privacy**: bridged group audio stays inside the group; players who are not members hear only
+  normal proximity chat.
+- **Inspection**: `/vb groups` lists currently bridged groups and their per-side member counts.
+
+### Group limitations
+
+- Password-protected SVC groups and permission-restricted PV groups are not mirrored (the other mod
+  cannot enforce or read them); create them manually on both sides if you need them.
+- The SVC group UI lists only SVC members, and the PV client group overlay lists only PV members —
+  members from the other mod are invisible in those rosters (use `/vb groups` on the server to see both).
+- Non-positional (full-volume) group audio does not render a name-tag microphone icon on the receiving
+  side; that is a limitation of each mod's static-audio rendering.
+
 ## Architecture
 
 ```
@@ -128,7 +158,8 @@ Permission: vanilla game-master commands permission (`Permissions.COMMANDS_GAMEM
 
 ## Known limitations
 
-- Group/channel bridging is not supported yet (proximity chat only)
+- Group bridging requires the [pv-addon-groups](https://modrinth.com/plugin/pv-addon-groups) server addon
+  (see the [Group bridging](#group-bridging) section above)
 - Transcoding mode is not yet implemented (passthrough only)
 
 The SVC-only edge cases from the original Paper version (audio from PV players not heard
